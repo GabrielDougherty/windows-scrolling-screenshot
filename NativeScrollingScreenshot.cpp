@@ -132,14 +132,22 @@ BOOL InitInstance(HINSTANCE hInstance, int nCmdShow)
    return TRUE;
 }
 
-bool runYet = false;
+HINSTANCE g_hInstance = (HINSTANCE)GetModuleHandle(NULL);
+HWND g_hMainWnd = NULL;
+bool g_MovingMainWnd = false;
+POINT g_OrigCursorPos;
+bool g_runYet = false;
 
 int runMe(HWND parentHwnd) {
     HWND hwnd = NULL;
 
     // Display a message to the user
-    MessageBox(NULL, L"Click on the window you want to get the HWND of.", L"Get HWND", MB_OK);
-    hwnd = SetCapture(parentHwnd);
+    //MessageBox(NULL, L"Click on the window you want to get the HWND of.", L"Get HWND", MB_OK);
+    //hwnd = SetCapture(parentHwnd);
+    POINT p;
+    p.x = 5;
+    p.y = 5;
+    hwnd = WindowFromPoint(p);
 
     if (hwnd) {
         // Do something with the HWND
@@ -150,11 +158,11 @@ int runMe(HWND parentHwnd) {
         // the string into the memory. 
 
         auto pszMem = (LPWSTR)VirtualAlloc((LPVOID)NULL,
-            (DWORD)(cTxtLen + 1), MEM_COMMIT,
+            (DWORD)(cTxtLen + 1), MEM_COMMIT,  
             PAGE_READWRITE);
         GetWindowText(hwnd, pszMem,
             cTxtLen + 1);
-        printf("Got title %s\n", pszMem);
+        printf("Got title %ls\n", pszMem);
         RECT r;
         GetClientRect(hwnd, &r);
         SendMessage(hwnd, WM_MOUSEWHEEL, MAKEWPARAM(0, WHEEL_DELTA * -10), MAKELPARAM(r.right / 2, r.bottom / 2));
@@ -165,7 +173,7 @@ int runMe(HWND parentHwnd) {
 
     return 0;
 }
-
+POINT g_OrigWndPos;
 //
 //  FUNCTION: WndProc(HWND, UINT, WPARAM, LPARAM)
 //
@@ -180,6 +188,30 @@ LRESULT CALLBACK WndProc(HWND hWnd, UINT message, WPARAM wParam, LPARAM lParam)
 {
     switch (message)
     {
+    case WM_LBUTTONDOWN:
+        printf("WM_BUTTONDOWN\n");
+        // here you can add extra check and decide whether to start
+        // the window move or not
+        if (GetCursorPos(&g_OrigCursorPos))
+        {
+            RECT rt;
+            GetWindowRect(hWnd, &rt);
+            g_OrigWndPos.x = rt.left;
+            g_OrigWndPos.y = rt.top;
+            g_MovingMainWnd = true;
+            SetCapture(hWnd);
+            SetCursor(LoadCursor(NULL, IDC_SIZEALL));
+        }
+        return 0;
+    case WM_LBUTTONUP:
+        printf("WM_BUTTONUP\n");
+        ReleaseCapture();
+        return 0;
+    case WM_CAPTURECHANGED:
+        g_MovingMainWnd = (HWND)lParam == hWnd;
+        printf("WM_CAPTURECHANGED\n");
+        printf("g_MovingMainWnd = %s\n", (g_MovingMainWnd ? "true" : "false"));
+        return 0;
     case WM_COMMAND:
     {
         int wmId = LOWORD(wParam);
@@ -211,10 +243,10 @@ LRESULT CALLBACK WndProc(HWND hWnd, UINT message, WPARAM wParam, LPARAM lParam)
     default:
         return DefWindowProc(hWnd, message, wParam, lParam);
     }
-    if (!runYet)
+    if (!g_runYet)
     {
         runMe(hWnd);
-        runYet = true;
+        g_runYet = true;
     }
     return 0;
 }
