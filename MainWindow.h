@@ -11,6 +11,7 @@ public:
     ATOM myRegisterClass(HINSTANCE hInstance);
     BOOL initInstance(HINSTANCE hInstance, int nCmdShow);
     void runMe(winrt::Windows::Foundation::IInspectable const&, winrt::Windows::UI::Xaml::RoutedEventArgs const&);
+    void takeScreenshotHandler(winrt::Windows::Foundation::IInspectable const&, winrt::Windows::UI::Xaml::RoutedEventArgs const&);
 
     static HWND _hWnd;
     static HWND _childhWnd;

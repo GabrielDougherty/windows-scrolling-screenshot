@@ -65,6 +65,7 @@ bool g_MovingMainWnd = false;
 POINT g_OrigCursorPos;
 bool g_runYet = false;
 std::atomic<int> g_scrollCount{ 0 };
+std::atomic<int> g_screenshotCount{ 0 };
 using namespace Windows::UI::Xaml;
 using namespace winrt::Windows::Foundation;
 
@@ -88,7 +89,7 @@ namespace
                 }
                 std::this_thread::sleep_for(std::chrono::milliseconds(10));
             }
-
+            PostMessage(MainWindow::_hWnd, WM_SYSCOMMAND, SC_MINIMIZE, 0);
             printf("successfully triggered\n");
             while (g_scrollCount > 0)
             {
@@ -96,6 +97,8 @@ namespace
                 std::this_thread::sleep_for(std::chrono::milliseconds(10));
                 g_scrollCount--;
             }
+            PostMessage(MainWindow::_hWnd, WM_SYSCOMMAND, SC_RESTORE, 0);
+
             g_scrollCount = 0;
         }
     }
@@ -134,6 +137,35 @@ namespace
         }
 
         return;
+    }
+    void consumeScreenshotClicks(std::stop_token stoken)
+    {
+        while (true)
+        {
+            if (stoken.stop_requested())
+            {
+                return;
+            }
+            printf("got here 2\n");
+            while (g_screenshotCount == 0)
+            {
+                if (stoken.stop_requested())
+                {
+                    return;
+                }
+                std::this_thread::sleep_for(std::chrono::milliseconds(10));
+            }
+            PostMessage(MainWindow::_hWnd, WM_SYSCOMMAND, SC_MINIMIZE, 0);
+            printf("successfully triggered screnshot\n");
+            do
+            {
+                std::this_thread::sleep_for(std::chrono::milliseconds(1000));
+                g_screenshotCount--;
+            } while (g_scrollCount > 0);
+            PostMessage(MainWindow::_hWnd, WM_SYSCOMMAND, SC_RESTORE, 0);
+
+            g_screenshotCount = 0;
+        }
     }
 }
 // Global Variables:
@@ -225,10 +257,16 @@ int APIENTRY MainWindow::handleWinMain(_In_ HINSTANCE hInstance,
     Windows::UI::Xaml::Controls::Button b;
     b.Width(300);
     b.Height(200);
-    b.Content(box_value(L"Click Me"));
+    b.Content(box_value(L"Scroll Once"));
+    Windows::UI::Xaml::Controls::Button b2;
+    b2.Width(300);
+    b2.Height(200);
+    b2.Content(box_value(L"Take Screenshot"));
+    b2.Click({ this, &MainWindow::takeScreenshotHandler });
     b.Click({ this, &MainWindow::runMe });
     xamlContainer.Children().Append(tb);
-    xamlContainer.Children().Append(b);
+    xamlContainer.Children().Append(b2);
+    //xamlContainer.Children().Append(b);
     xamlContainer.UpdateLayout();
     desktopSource.Content(xamlContainer);
 
@@ -237,6 +275,7 @@ int APIENTRY MainWindow::handleWinMain(_In_ HINSTANCE hInstance,
     ShowWindow(_hWnd, nCmdShow);
     UpdateWindow(_hWnd);
     TerminatingThread doScrollThread{ consumeScrollClicks };
+    TerminatingThread doScreenshotThread{ consumeScreenshotClicks };
 
     //Message loop:
     MSG msg = { };
@@ -312,6 +351,13 @@ void MainWindow::runMe(IInspectable const&, RoutedEventArgs const&)
 {
     printf("got here");
     g_scrollCount++;
+}
+
+
+void MainWindow::takeScreenshotHandler(winrt::Windows::Foundation::IInspectable const&, winrt::Windows::UI::Xaml::RoutedEventArgs const&)
+{
+    printf("take screenshot handler");
+    g_screenshotCount++;
 }
 POINT g_OrigWndPos;
 //
