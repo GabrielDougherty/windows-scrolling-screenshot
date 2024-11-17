@@ -130,6 +130,7 @@
   </ItemDefinitionGroup>
   <ItemGroup>
     <ClInclude Include="framework.h" />
+    <ClInclude Include="TerminatingThread.h" />
     <ClInclude Include="MainWindow.h" />
     <ClInclude Include="NativeScrollingScreenshot.h" />
     <ClInclude Include="Resource.h" />

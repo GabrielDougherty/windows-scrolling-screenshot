@@ -4,6 +4,7 @@
 #include "framework.h"
 #include "resource.h"
 #include "MainWindow.h"
+#include "TerminatingThread.h"
 
 #include <cstdio>
 #include <Windows.h>
@@ -70,13 +71,21 @@ using namespace winrt::Windows::Foundation;
 namespace
 {
     void scrollOnce();
-    void consumeScrollClicks()
+    void consumeScrollClicks(std::stop_token stoken)
     {
         while (true)
         {
+            if (stoken.stop_requested())
+            {
+                return;
+            }
             printf("got here 2\n");
             while (g_scrollCount == 0)
             {
+                if (stoken.stop_requested())
+                {
+                    return;
+                }
                 std::this_thread::sleep_for(std::chrono::milliseconds(10));
             }
 
@@ -90,7 +99,8 @@ namespace
             g_scrollCount = 0;
         }
     }
-    void scrollOnce() {
+    void scrollOnce()
+    {
         HWND hwnd = NULL;
 
         // Display a message to the user
@@ -226,7 +236,7 @@ int APIENTRY MainWindow::handleWinMain(_In_ HINSTANCE hInstance,
 
     ShowWindow(_hWnd, nCmdShow);
     UpdateWindow(_hWnd);
-    std::jthread doScrollThread{ consumeScrollClicks };
+    TerminatingThread doScrollThread{ consumeScrollClicks };
 
     //Message loop:
     MSG msg = { };
