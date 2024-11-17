@@ -1,5 +1,6 @@
 #pragma once
 #include <Windows.h>
+#include <winrt/windows.ui.xaml.controls.h>
 class MainWindow
 {
 public:
@@ -9,5 +10,9 @@ public:
         _In_ int       nCmdShow);
     ATOM myRegisterClass(HINSTANCE hInstance);
     BOOL initInstance(HINSTANCE hInstance, int nCmdShow);
-    int runMe(HWND parentHwnd);
+    void runMe(winrt::Windows::Foundation::IInspectable const&, winrt::Windows::UI::Xaml::RoutedEventArgs const&);
+
+    static HWND _hWnd;
+    static HWND _childhWnd;
+    static HINSTANCE _hInstance;
 };

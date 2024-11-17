@@ -52,4 +52,10 @@
       <Filter>Resource Files</Filter>
     </Image>
   </ItemGroup>
+  <ItemGroup>
+    <None Include="packages.config" />
+  </ItemGroup>
+  <ItemGroup>
+    <Manifest Include="NativeScrollingScreenshot.exe.manifest" />
+  </ItemGroup>
 </Project>
