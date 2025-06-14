@@ -4,7 +4,6 @@
 #include "framework.h"
 #include "resource.h"
 #include "MainWindow.h"
-#include "TerminatingThread.h"
 
 #include <cstdio>
 #include <Windows.h>
