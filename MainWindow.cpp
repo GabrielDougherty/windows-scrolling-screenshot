@@ -59,115 +59,145 @@ namespace
     }
 }
 
+// Queue-based command pattern - most scalable approach
+#include <queue>
+#include <mutex>
+#include <condition_variable>
+#include <functional>
+#include <thread>
+#include <atomic>
+
+enum class ActionType {
+    SCREENSHOT,
+};
+
+struct Command {
+    ActionType type;
+    std::function<void()> action;
+
+    Command(ActionType t, std::function<void()> a) : type(t), action(std::move(a)) {}
+};
+
+class CommandProcessor {
+private:
+    std::queue<Command> commandQueue;
+    std::mutex queueMutex;
+    std::condition_variable cv;
+    std::thread workerThread;
+    std::atomic<bool> running{ true };
+
+public:
+    CommandProcessor() {
+        workerThread = std::thread(&CommandProcessor::processCommands, this);
+    }
+
+    ~CommandProcessor() {
+        shutdown();
+    }
+
+    void enqueueCommand(ActionType type, std::function<void()> action) {
+        {
+            std::lock_guard<std::mutex> lock(queueMutex);
+            commandQueue.emplace(type, std::move(action));
+        }
+        cv.notify_one();
+    }
+
+    void shutdown() {
+        running = false;
+        cv.notify_all();
+        if (workerThread.joinable()) {
+            workerThread.join();
+        }
+    }
+
+private:
+    void processCommands() {
+        while (running) {
+            std::unique_lock<std::mutex> lock(queueMutex);
+
+            cv.wait(lock, [this] { return !commandQueue.empty() || !running; });
+
+            if (!running) break;
+
+            if (!commandQueue.empty()) {
+                Command cmd = std::move(commandQueue.front());
+                commandQueue.pop();
+                lock.unlock();
+
+                // Execute the command
+                executeCommand(cmd);
+            }
+        }
+    }
+
+    void executeCommand(const Command& cmd) {
+        printf("Executing command type: %d\n", static_cast<int>(cmd.type));
+
+        // Execute the specific action
+        if (cmd.action) {
+            cmd.action();
+        }
+    }
+};
+
+// Action implementations
+class Actions {
+private:
+public:
+    static void scrollAction() {
+        printf("Performing scroll action\n");
+        // Your existing scrollOnce() logic
+        HWND hwnd = WindowFromPoint({ 800, 800 });
+        if (hwnd) {
+            RECT r;
+            GetClientRect(hwnd, &r);
+            SendMessage(hwnd, WM_MOUSEWHEEL, MAKEWPARAM(0, WHEEL_DELTA * -1),
+                MAKELPARAM(r.right / 2, r.bottom / 2));
+        }
+    }
+
+    static void screenshotAction() {
+        printf("Performing screenshot action\n");
+        PostMessage(MainWindow::_hWnd, WM_SYSCOMMAND, SC_MINIMIZE, 0);
+        printf("successfully triggered screnshot\n");
+
+        HWND hwnd = WindowFromPoint({ 800, 800 });
+        for (int i = 0; i < 15; ++i)
+        {
+            if (hwnd) {
+                RECT r;
+                GetClientRect(hwnd, &r);
+                SendMessage(hwnd, WM_MOUSEWHEEL, MAKEWPARAM(0, WHEEL_DELTA * -1),
+                    MAKELPARAM(r.right / 2, r.bottom / 2));
+                std::this_thread::sleep_for(std::chrono::milliseconds(10));
+            }
+        }
+        // allow scroll animation to finish (duration is based on heuristic from testing)
+        std::this_thread::sleep_for(std::chrono::milliseconds(1000));
+        PostMessage(MainWindow::_hWnd, WM_SYSCOMMAND, SC_RESTORE, 0);
+    }
+};
+
+// Global command processor
+std::unique_ptr<CommandProcessor> g_commandProcessor;
+
+void MainWindow::takeScreenshotHandler(winrt::Windows::Foundation::IInspectable const&,
+    winrt::Windows::UI::Xaml::RoutedEventArgs const&) {
+    printf("Screenshot button clicked\n");
+    if (g_commandProcessor) {
+        g_commandProcessor->enqueueCommand(ActionType::SCREENSHOT, Actions::screenshotAction);
+    }
+}
+
 HINSTANCE g_hInstance = (HINSTANCE)GetModuleHandle(NULL);
 HWND g_hMainWnd = NULL;
 bool g_MovingMainWnd = false;
 POINT g_OrigCursorPos;
 bool g_runYet = false;
-std::atomic<int> g_scrollCount{ 0 };
-std::atomic<int> g_screenshotCount{ 0 };
 using namespace Windows::UI::Xaml;
 using namespace winrt::Windows::Foundation;
 
-namespace
-{
-    void scrollOnce();
-    void consumeScrollClicks(std::stop_token stoken)
-    {
-        while (true)
-        {
-            if (stoken.stop_requested())
-            {
-                return;
-            }
-            printf("got here 2\n");
-            while (g_scrollCount == 0)
-            {
-                if (stoken.stop_requested())
-                {
-                    return;
-                }
-                std::this_thread::sleep_for(std::chrono::milliseconds(10));
-            }
-            PostMessage(MainWindow::_hWnd, WM_SYSCOMMAND, SC_MINIMIZE, 0);
-            printf("successfully triggered\n");
-            while (g_scrollCount > 0)
-            {
-                scrollOnce();
-                std::this_thread::sleep_for(std::chrono::milliseconds(10));
-                g_scrollCount--;
-            }
-            PostMessage(MainWindow::_hWnd, WM_SYSCOMMAND, SC_RESTORE, 0);
-
-            g_scrollCount = 0;
-        }
-    }
-    void scrollOnce()
-    {
-        HWND hwnd = NULL;
-
-        // Display a message to the user
-        //MessageBox(NULL, L"Click on the window you want to get the HWND of.", L"Get HWND", MB_OK);
-        //hwnd = SetCapture(parentHwnd);
-        POINT p;
-        p.x = 800;
-        p.y = 800;
-        hwnd = WindowFromPoint(p);
-
-        if (hwnd) {
-            // Do something with the HWND
-            printf("HWND: 0x%p\n", hwnd);
-            auto cTxtLen = GetWindowTextLength(hwnd);
-
-            // Allocate memory for the string and copy 
-            // the string into the memory. 
-
-            auto pszMem = (LPWSTR)VirtualAlloc((LPVOID)NULL,
-                (DWORD)(cTxtLen + 1), MEM_COMMIT,
-                PAGE_READWRITE);
-            GetWindowText(hwnd, pszMem,
-                cTxtLen + 1);
-            printf("Got title %ls\n", pszMem);
-            RECT r;
-            GetClientRect(hwnd, &r);
-            SendMessage(hwnd, WM_MOUSEWHEEL, MAKEWPARAM(0, WHEEL_DELTA * -1), MAKELPARAM(r.right / 2, r.bottom / 2));
-        }
-        else {
-            printf("No window selected.\n");
-        }
-
-        return;
-    }
-    void consumeScreenshotClicks(std::stop_token stoken)
-    {
-        while (true)
-        {
-            if (stoken.stop_requested())
-            {
-                return;
-            }
-            printf("got here 2\n");
-            while (g_screenshotCount == 0)
-            {
-                if (stoken.stop_requested())
-                {
-                    return;
-                }
-                std::this_thread::sleep_for(std::chrono::milliseconds(10));
-            }
-            PostMessage(MainWindow::_hWnd, WM_SYSCOMMAND, SC_MINIMIZE, 0);
-            printf("successfully triggered screnshot\n");
-            do
-            {
-                std::this_thread::sleep_for(std::chrono::milliseconds(1000));
-                g_screenshotCount--;
-            } while (g_scrollCount > 0);
-            PostMessage(MainWindow::_hWnd, WM_SYSCOMMAND, SC_RESTORE, 0);
-
-            g_screenshotCount = 0;
-        }
-    }
-}
 // Global Variables:
 HINSTANCE hInst;                                // current instance
 WCHAR szTitle[MAX_LOADSTRING];                  // The title bar text
@@ -183,7 +213,7 @@ int APIENTRY MainWindow::handleWinMain(_In_ HINSTANCE hInstance,
     _In_ int       nCmdShow)
 {
     _hInstance = hInstance;
-
+    g_commandProcessor = std::make_unique<CommandProcessor>();
     // The main window class name.
     const wchar_t szWindowClass[] = L"Win32DesktopApp";
     WNDCLASSEX windowClass = { };
@@ -263,7 +293,6 @@ int APIENTRY MainWindow::handleWinMain(_In_ HINSTANCE hInstance,
     b2.Height(200);
     b2.Content(box_value(L"Take Screenshot"));
     b2.Click({ this, &MainWindow::takeScreenshotHandler });
-    b.Click({ this, &MainWindow::runMe });
     xamlContainer.Children().Append(tb);
     xamlContainer.Children().Append(b2);
     //xamlContainer.Children().Append(b);
@@ -274,8 +303,6 @@ int APIENTRY MainWindow::handleWinMain(_In_ HINSTANCE hInstance,
 
     ShowWindow(_hWnd, nCmdShow);
     UpdateWindow(_hWnd);
-    TerminatingThread doScrollThread{ consumeScrollClicks };
-    TerminatingThread doScreenshotThread{ consumeScreenshotClicks };
 
     //Message loop:
     MSG msg = { };
@@ -347,18 +374,6 @@ BOOL MainWindow::initInstance(HINSTANCE hInstance, int nCmdShow)
     return TRUE;
 }
 
-void MainWindow::runMe(IInspectable const&, RoutedEventArgs const&)
-{
-    printf("got here");
-    g_scrollCount++;
-}
-
-
-void MainWindow::takeScreenshotHandler(winrt::Windows::Foundation::IInspectable const&, winrt::Windows::UI::Xaml::RoutedEventArgs const&)
-{
-    printf("take screenshot handler");
-    g_screenshotCount++;
-}
 POINT g_OrigWndPos;
 //
 //  FUNCTION: WndProc(HWND, UINT, WPARAM, LPARAM)
