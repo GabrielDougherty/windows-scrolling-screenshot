@@ -1,13 +1,13 @@
 #include "ImageStitcher.h"
 #include <Windows.h>
 
-// OpenCV 2.4.11 headers
-#include <opencv2/core/core.hpp>
-#include <opencv2/imgproc/imgproc.hpp>
-#include <opencv2/highgui/highgui.hpp>
-#include <opencv2/calib3d/calib3d.hpp>
-#include <opencv2/features2d/features2d.hpp>
-#include <opencv2/nonfree/features2d.hpp> // For SURF/SIFT
+// OpenCV 4 headers
+#include <opencv2/core.hpp>
+#include <opencv2/imgproc.hpp>
+#include <opencv2/highgui.hpp>
+#include <opencv2/calib3d.hpp>
+#include <opencv2/features2d.hpp>
+#include <opencv2/xfeatures2d.hpp> // For SURF/SIFT
 
 HBITMAP ImageStitcher::StitchImagesWithFeatureMatching(const std::vector<HBITMAP>& bitmaps) {
     if (bitmaps.empty())
@@ -54,7 +54,7 @@ HBITMAP ImageStitcher::StitchImagesWithFeatureMatching(const std::vector<HBITMAP
         if (images.empty())
             return NULL;
         
-        // For OpenCV 2.4.11, we'll use a different approach for stitching
+        // For OpenCV 4, we'll use a different approach for stitching
         // We'll manually stitch images using feature detection and homography
         
         // Result will be a vertically stacked image
@@ -91,29 +91,30 @@ HBITMAP ImageStitcher::StitchImagesWithFeatureMatching(const std::vector<HBITMAP
                 try {
                     // Convert to grayscale for feature detection
                     cv::Mat prevGray, currGray;
-                    cv::cvtColor(previousImage, prevGray, CV_BGR2GRAY);
-                    cv::cvtColor(currentImage, currGray, CV_BGR2GRAY);
+                    cv::cvtColor(previousImage, prevGray, cv::COLOR_BGRA2GRAY);
+                    cv::cvtColor(currentImage, currGray, cv::COLOR_BGRA2GRAY);
                     
                     // Detect keypoints and compute descriptors using SURF
-                    cv::SurfFeatureDetector detector(400);
-                    cv::SurfDescriptorExtractor extractor;
+                    // In OpenCV 4, SURF is in the xfeatures2d namespace
+                    auto detector = cv::xfeatures2d::SURF::create(400);
                     
                     std::vector<cv::KeyPoint> keypointsPrev, keypointsCurr;
                     cv::Mat descriptorsPrev, descriptorsCurr;
                     
-                    detector.detect(prevGray, keypointsPrev);
-                    detector.detect(currGray, keypointsCurr);
+                    detector->detect(prevGray, keypointsPrev);
+                    detector->detect(currGray, keypointsCurr);
                     
                     // Check if we have enough keypoints
                     if (keypointsPrev.size() > 4 && keypointsCurr.size() > 4) {
-                        extractor.compute(prevGray, keypointsPrev, descriptorsPrev);
-                        extractor.compute(currGray, keypointsCurr, descriptorsCurr);
+                        detector->compute(prevGray, keypointsPrev, descriptorsPrev);
+                        detector->compute(currGray, keypointsCurr, descriptorsCurr);
                         
                         // Match features
                         std::vector<cv::DMatch> matches;
                         if (!descriptorsPrev.empty() && !descriptorsCurr.empty()) {
-                            cv::FlannBasedMatcher matcher;
-                            matcher.match(descriptorsCurr, descriptorsPrev, matches);
+                            // In OpenCV 4, use FlannBasedMatcher with KDTree
+                            cv::Ptr<cv::DescriptorMatcher> matcher = cv::DescriptorMatcher::create(cv::DescriptorMatcher::FLANNBASED);
+                            matcher->match(descriptorsCurr, descriptorsPrev, matches);
                             
                             // Find good matches
                             double maxDist = 0, minDist = 100;
@@ -139,7 +140,7 @@ HBITMAP ImageStitcher::StitchImagesWithFeatureMatching(const std::vector<HBITMAP
                                 }
                                 
                                 // Find homography matrix
-                                cv::Mat H = cv::findHomography(pointsCurr, pointsPrev, CV_RANSAC);
+                                cv::Mat H = cv::findHomography(pointsCurr, pointsPrev, cv::RANSAC);
                                 
                                 if (!H.empty()) {
                                     // Calculate offset for proper alignment
@@ -369,10 +370,10 @@ HBITMAP ImageStitcher::MatToHBitmap(const cv::Mat& mat) {
     
     if (mat.type() != CV_8UC4) {
         if (mat.channels() == 3) {
-            cv::cvtColor(mat, bgra, CV_BGR2BGRA);
+            cv::cvtColor(mat, bgra, cv::COLOR_BGR2BGRA);
         } 
         else if (mat.channels() == 1) {
-            cv::cvtColor(mat, bgra, CV_GRAY2BGRA);
+            cv::cvtColor(mat, bgra, cv::COLOR_GRAY2BGRA);
         }
         else {
             // Unsupported format, return NULL
