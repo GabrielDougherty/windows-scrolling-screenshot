@@ -4,7 +4,7 @@
 #include "framework.h"
 #include "resource.h"
 #include "MainWindow.h"
-#include "ScreenshotService.h" // Include the new screenshot service
+#include "ScreenshotService.h" // Include the screenshot service header
 
 #include <cstdio>
 #include <Windows.h>
@@ -184,13 +184,13 @@ public:
 std::unique_ptr<CommandProcessor> g_commandProcessor;
 
 // Global screenshot service
-std::shared_ptr<IScreenshotService> g_screenshotService;
+std::shared_ptr<ScreenshotService> g_screenshotService;
 
 // Declaration of the CreateScreenshotService function (implemented in ScreenshotService.cpp)
-extern std::shared_ptr<IScreenshotService> CreateScreenshotService(HWND mainWindow, HINSTANCE hInstance);
+extern std::shared_ptr<ScreenshotService> CreateScreenshotService(HWND mainWindow, HINSTANCE hInstance);
 
 // Implementation of the screenshot callback
-class MainWindowScreenshotCallback : public IScreenshotCallback {
+class MainWindowScreenshotCallback : public ScreenshotCallback {
 public:
     void OnScreenshotCaptured(bool success) override {
         printf("Screenshot captured: %s\n", success ? "SUCCESS" : "FAILED");
@@ -198,19 +198,29 @@ public:
         // Add debug output for better troubleshooting
         if (success) {
             OutputDebugString(L"Screenshot callback: Capture successful\n");
-            // We could add additional UI feedback here
+            // Could add additional UI feedback here
+            MessageBox(MainWindow::_hWnd, 
+                      L"Scrolling screenshot captured and saved to clipboard. You can now paste it into an image editor.",
+                      L"Screenshot Successful", 
+                      MB_OK | MB_ICONINFORMATION);
         } else {
             OutputDebugString(L"Screenshot callback: Capture failed\n");
             // Display an error message to the user
-            MessageBox(MainWindow::_hWnd, L"Failed to capture screenshot.", 
-                      L"Screenshot Error", MB_OK | MB_ICONERROR);
+            MessageBox(MainWindow::_hWnd, 
+                      L"Failed to capture scrolling screenshot. Please try again with a different region.",
+                      L"Screenshot Error", 
+                      MB_OK | MB_ICONERROR);
         }
     }
     
     void OnSelectionCancelled() override {
         printf("Screenshot selection cancelled\n");
         OutputDebugString(L"Screenshot callback: Selection cancelled\n");
-        // Optionally provide feedback about cancellation
+        // Provide feedback about cancellation
+        MessageBox(MainWindow::_hWnd, 
+                  L"Screenshot selection cancelled.",
+                  L"Screenshot Cancelled", 
+                  MB_OK | MB_ICONINFORMATION);
     }
 };
 
@@ -218,6 +228,17 @@ void MainWindow::takeScreenshotHandler(winrt::Windows::Foundation::IInspectable 
     winrt::Windows::UI::Xaml::RoutedEventArgs const&) {
     printf("Screenshot button clicked\n");
     OutputDebugString(L"Take Screenshot button clicked\n");
+    
+    // Show instructions to the user before starting the screenshot process
+    MessageBox(MainWindow::_hWnd, 
+               L"Select a region to capture a scrolling screenshot.\n\n"
+               L"The program will:\n"
+               L"1. Capture the selected area\n"
+               L"2. Scroll the content for 5 seconds\n"
+               L"3. Combine all screenshots into one tall image\n\n"
+               L"Make sure to select an area that has scrollable content.",
+               L"Scrolling Screenshot Instructions", 
+               MB_OK | MB_ICONINFORMATION);
     
     // Use the screenshot service to take a screenshot
     if (g_screenshotService) {

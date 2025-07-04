@@ -1,9 +1,9 @@
 #pragma once
 #include <Windows.h>
-#include <functional>
 #include <memory>
-#include <optional>
 #include <string>
+#include <vector>
+#include <optional>
 
 // Structure to represent a screenshot selection area
 struct ScreenshotArea {
@@ -13,62 +13,33 @@ struct ScreenshotArea {
     int height;
 };
 
-// Interface for window management
-class IWindowManager {
-public:
-    virtual ~IWindowManager() = default;
-    
-    virtual HWND GetMainWindow() const = 0;
-    virtual void MinimizeWindow(HWND hwnd) = 0;
-    virtual void RestoreWindow(HWND hwnd) = 0;
-    virtual ATOM RegisterWindowClass(HINSTANCE hInstance, LPCWSTR className, WNDPROC wndProc) = 0;
-    virtual HWND CreateOverlayWindow(HINSTANCE hInstance, LPCWSTR className) = 0;
-    virtual void ShowWindow(HWND hwnd, int nCmdShow) = 0;
-    virtual void UpdateWindow(HWND hwnd) = 0;
-    virtual void SetForegroundWindow(HWND hwnd) = 0;
-    virtual void SetActiveWindow(HWND hwnd) = 0;
-    virtual void DestroyWindow(HWND hwnd) = 0;
-};
+// Forward declarations
+class ScreenshotService;
 
-// Interface for screenshot capture
-class IScreenshotCapture {
-public:
-    virtual ~IScreenshotCapture() = default;
-    
-    virtual bool CaptureArea(const ScreenshotArea& area) = 0;
-    virtual bool SaveToClipboard(HBITMAP hBitmap) = 0;
-    virtual void ShowNotification(const std::wstring& message) = 0;
-};
-
-// Interface for overlay interaction
-class IOverlayHandler {
-public:
-    virtual ~IOverlayHandler() = default;
-    
-    virtual void StartSelection(int x, int y) = 0;
-    virtual void UpdateSelection(int x, int y) = 0;
-    virtual void EndSelection(int x, int y) = 0;
-    virtual void CancelSelection() = 0;
-    virtual void DrawSelection(HDC hdc, const RECT& clientRect) = 0;
-    virtual std::optional<ScreenshotArea> GetCurrentSelection() const = 0;
-};
+// Factory function to create the screenshot service
+std::shared_ptr<ScreenshotService> CreateScreenshotService(HWND mainWindow, HINSTANCE hInstance);
 
 // Callback interface for screenshot events
-class IScreenshotCallback {
+class ScreenshotCallback {
 public:
-    virtual ~IScreenshotCallback() = default;
+    virtual ~ScreenshotCallback() = default;
     
     virtual void OnScreenshotCaptured(bool success) = 0;
     virtual void OnSelectionCancelled() = 0;
 };
 
-// Screenshot service that coordinates the entire screenshot process
-class IScreenshotService {
+// Main service class for screenshot functionality
+class ScreenshotService {
 public:
-    virtual ~IScreenshotService() = default;
+    // Destructor
+    virtual ~ScreenshotService() = default;
     
+    // Start the screenshot process (shows overlay)
     virtual void StartScreenshotProcess() = 0;
-    virtual void CaptureSelectedArea(const ScreenshotArea& area) = 0;
-    virtual void SetScreenshotCallback(std::shared_ptr<IScreenshotCallback> callback) = 0;
+    
+    // Set the callback to receive notifications
+    virtual void SetScreenshotCallback(std::shared_ptr<ScreenshotCallback> callback) = 0;
+    
+    // Window procedure message handler
     virtual LRESULT HandleOverlayWindowMessage(HWND hWnd, UINT message, WPARAM wParam, LPARAM lParam) = 0;
 };
