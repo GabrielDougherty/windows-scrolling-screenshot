@@ -40,6 +40,11 @@ using namespace Windows::Foundation::Numerics;
 HWND MainWindow::_childhWnd;
 HINSTANCE MainWindow::_hInstance;
 HWND MainWindow::_hWnd;
+HWND MainWindow::_overlayWnd = NULL;
+bool MainWindow::_isSelecting = false;
+POINT MainWindow::_startPoint = {0, 0};
+POINT MainWindow::_endPoint = {0, 0};
+std::optional<ScreenshotArea> MainWindow::_currentSelection = std::nullopt;
 
 namespace
 {
@@ -68,6 +73,7 @@ namespace
 
 enum class ActionType {
     SCREENSHOT,
+    SCREENSHOT_AREA,
 };
 
 struct Command {
@@ -176,6 +182,31 @@ public:
         std::this_thread::sleep_for(std::chrono::milliseconds(1000));
         PostMessage(MainWindow::_hWnd, WM_SYSCOMMAND, SC_RESTORE, 0);
     }
+    
+    static void screenshotAreaAction(const ScreenshotArea& area) {
+        printf("Performing area screenshot action: left=%d, top=%d, width=%d, height=%d\n", 
+               area.left, area.top, area.width, area.height);
+        
+        // Hide the overlay window while taking the screenshot
+        if (MainWindow::_overlayWnd) {
+            ShowWindow(MainWindow::_overlayWnd, SW_HIDE);
+        }
+        
+        // Allow the screen to update without the overlay
+        std::this_thread::sleep_for(std::chrono::milliseconds(100));
+        
+        // Capture the specified area
+        MainWindow::captureScreenshot(area);
+        
+        // Clean up
+        if (MainWindow::_overlayWnd) {
+            DestroyWindow(MainWindow::_overlayWnd);
+            MainWindow::_overlayWnd = NULL;
+        }
+        
+        MainWindow::_isSelecting = false;
+        MainWindow::_currentSelection = std::nullopt;
+    }
 };
 
 // Global command processor
@@ -184,9 +215,209 @@ std::unique_ptr<CommandProcessor> g_commandProcessor;
 void MainWindow::takeScreenshotHandler(winrt::Windows::Foundation::IInspectable const&,
     winrt::Windows::UI::Xaml::RoutedEventArgs const&) {
     printf("Screenshot button clicked\n");
-    if (g_commandProcessor) {
-        g_commandProcessor->enqueueCommand(ActionType::SCREENSHOT, Actions::screenshotAction);
+    
+    // Register and create the overlay window
+    registerOverlayClass(_hInstance);
+    _overlayWnd = createOverlayWindow();
+    
+    if (_overlayWnd) {
+        // Show the overlay window
+        ShowWindow(_overlayWnd, SW_SHOW);
+        UpdateWindow(_overlayWnd);
+        SetForegroundWindow(_overlayWnd);
+        
+        printf("Overlay window created for screenshot selection\n");
     }
+}
+
+ATOM MainWindow::registerOverlayClass(HINSTANCE hInstance) {
+    WNDCLASSEX wcex = {};
+    
+    wcex.cbSize = sizeof(WNDCLASSEX);
+    wcex.style = CS_HREDRAW | CS_VREDRAW;
+    wcex.lpfnWndProc = overlayWndProc;
+    wcex.cbClsExtra = 0;
+    wcex.cbWndExtra = 0;
+    wcex.hInstance = hInstance;
+    wcex.hCursor = LoadCursor(nullptr, IDC_CROSS);  // Use crosshair cursor
+    wcex.lpszClassName = L"OverlayWindowClass";
+    
+    return RegisterClassEx(&wcex);
+}
+
+HWND MainWindow::createOverlayWindow() {
+    // Get the screen dimensions
+    int screenWidth = GetSystemMetrics(SM_CXSCREEN);
+    int screenHeight = GetSystemMetrics(SM_CYSCREEN);
+    
+    // Create a transparent, topmost window covering the entire screen
+    HWND hwnd = CreateWindowEx(
+        WS_EX_TOPMOST | WS_EX_LAYERED | WS_EX_TRANSPARENT,
+        L"OverlayWindowClass",
+        L"Screenshot Overlay",
+        WS_POPUP,
+        0, 0, screenWidth, screenHeight,
+        NULL, NULL, _hInstance, NULL
+    );
+    
+    if (hwnd) {
+        // Set the window to be semi-transparent
+        SetLayeredWindowAttributes(hwnd, 0, 128, LWA_ALPHA);
+        
+        // Make the window receive mouse input events
+        SetWindowLong(hwnd, GWL_EXSTYLE, 
+            GetWindowLong(hwnd, GWL_EXSTYLE) & ~WS_EX_TRANSPARENT);
+    }
+    
+    return hwnd;
+}
+
+LRESULT CALLBACK MainWindow::overlayWndProc(HWND hWnd, UINT message, WPARAM wParam, LPARAM lParam) {
+    switch (message) {
+    case WM_LBUTTONDOWN:
+        _isSelecting = true;
+        _startPoint.x = LOWORD(lParam);
+        _startPoint.y = HIWORD(lParam);
+        _endPoint = _startPoint;
+        SetCapture(hWnd);
+        return 0;
+        
+    case WM_MOUSEMOVE:
+        if (_isSelecting) {
+            // Update the end point
+            _endPoint.x = LOWORD(lParam);
+            _endPoint.y = HIWORD(lParam);
+            
+            // Force a redraw to show the selection rectangle
+            InvalidateRect(hWnd, NULL, TRUE);
+        }
+        return 0;
+        
+    case WM_LBUTTONUP:
+        if (_isSelecting) {
+            _isSelecting = false;
+            ReleaseCapture();
+            
+            // Get the final end point
+            _endPoint.x = LOWORD(lParam);
+            _endPoint.y = HIWORD(lParam);
+            
+            // Calculate the selection area
+            int left = min(_startPoint.x, _endPoint.x);
+            int top = min(_startPoint.y, _endPoint.y);
+            int width = abs(_endPoint.x - _startPoint.x);
+            int height = abs(_endPoint.y - _startPoint.y);
+            
+            // Ensure minimum size
+            if (width > 5 && height > 5) {
+                _currentSelection = ScreenshotArea{left, top, width, height};
+                
+                // Perform the screenshot of the selected area
+                if (g_commandProcessor && _currentSelection) {
+                    g_commandProcessor->enqueueCommand(
+                        ActionType::SCREENSHOT_AREA, 
+                        [area = *_currentSelection]() { 
+                            Actions::screenshotAreaAction(area); 
+                        }
+                    );
+                }
+            } else {
+                // Cancel if the selection is too small
+                if (_overlayWnd) {
+                    DestroyWindow(_overlayWnd);
+                    _overlayWnd = NULL;
+                }
+            }
+        }
+        return 0;
+        
+    case WM_PAINT:
+    {
+        PAINTSTRUCT ps;
+        HDC hdc = BeginPaint(hWnd, &ps);
+        
+        // Create a transparent background
+        RECT clientRect;
+        GetClientRect(hWnd, &clientRect);
+        
+        // Fill with a semi-transparent color
+        HBRUSH backgroundBrush = CreateSolidBrush(RGB(100, 100, 100));
+        FillRect(hdc, &clientRect, backgroundBrush);
+        DeleteObject(backgroundBrush);
+        
+        // Draw the selection rectangle if selecting
+        if (_isSelecting) {
+            RECT selectionRect = {
+                min(_startPoint.x, _endPoint.x),
+                min(_startPoint.y, _endPoint.y),
+                max(_startPoint.x, _endPoint.x),
+                max(_startPoint.y, _endPoint.y)
+            };
+            
+            // Draw a white rectangle for the selection
+            HBRUSH selectBrush = CreateSolidBrush(RGB(255, 255, 255));
+            FrameRect(hdc, &selectionRect, selectBrush);
+            DeleteObject(selectBrush);
+            
+            // Draw dimension info
+            WCHAR dimensionText[50];
+            swprintf_s(dimensionText, L"%dx%d", 
+                selectionRect.right - selectionRect.left,
+                selectionRect.bottom - selectionRect.top);
+            
+            SetBkMode(hdc, TRANSPARENT);
+            SetTextColor(hdc, RGB(255, 255, 255));
+            TextOut(hdc, selectionRect.right + 5, selectionRect.bottom + 5, 
+                dimensionText, wcslen(dimensionText));
+        }
+        
+        EndPaint(hWnd, &ps);
+        return 0;
+    }
+        
+    case WM_KEYDOWN:
+        // Allow ESC to cancel the selection
+        if (wParam == VK_ESCAPE) {
+            if (_overlayWnd) {
+                DestroyWindow(_overlayWnd);
+                _overlayWnd = NULL;
+            }
+            return 0;
+        }
+        break;
+        
+    case WM_DESTROY:
+        _overlayWnd = NULL;
+        return 0;
+    }
+    
+    return DefWindowProc(hWnd, message, wParam, lParam);
+}
+
+void MainWindow::captureScreenshot(const ScreenshotArea& area) {
+    // Create compatible DC, bitmap and other objects needed for the screenshot
+    HDC hdcScreen = GetDC(NULL);
+    HDC hdcMemDC = CreateCompatibleDC(hdcScreen);
+    HBITMAP hbmScreen = CreateCompatibleBitmap(hdcScreen, area.width, area.height);
+    HGDIOBJ hOldObject = SelectObject(hdcMemDC, hbmScreen);
+    
+    // Copy screen to bitmap
+    BitBlt(hdcMemDC, 0, 0, area.width, area.height, 
+           hdcScreen, area.left, area.top, SRCCOPY);
+    
+    // Save the screenshot to clipboard
+    OpenClipboard(NULL);
+    EmptyClipboard();
+    SetClipboardData(CF_BITMAP, hbmScreen);
+    CloseClipboard();
+    
+    // Clean up
+    SelectObject(hdcMemDC, hOldObject);
+    DeleteObject(hbmScreen);
+    DeleteDC(hdcMemDC);
+    ReleaseDC(NULL, hdcScreen);
+    
+    printf("Screenshot captured and saved to clipboard\n");
 }
 
 HINSTANCE g_hInstance = (HINSTANCE)GetModuleHandle(NULL);
@@ -314,8 +545,6 @@ int APIENTRY MainWindow::handleWinMain(_In_ HINSTANCE hInstance,
     return 0;
 }
 
-
-
 //
 //  FUNCTION: MyRegisterClass()
 //
@@ -351,7 +580,7 @@ ATOM MainWindow::myRegisterClass(HINSTANCE hInstance)
 //   COMMENTS:
 //
 //        In this function, we save the instance handle in a global variable and
-//        create and display the main program window.
+        //        create and display the main program window.
 //
 BOOL MainWindow::initInstance(HINSTANCE hInstance, int nCmdShow)
 {
@@ -433,70 +662,6 @@ LRESULT CALLBACK WndProc(HWND hWnd, UINT messageCode, WPARAM wParam, LPARAM lPar
     }
 
     return 0;
-    //switch (message)
-    //{
-    //case WM_LBUTTONDOWN:
-    //    printf("WM_BUTTONDOWN\n");
-    //    // here you can add extra check and decide whether to start
-    //    // the window move or not
-    //    if (GetCursorPos(&g_OrigCursorPos))
-    //    {
-    //        RECT rt;
-    //        GetWindowRect(hWnd, &rt);
-    //        g_OrigWndPos.x = rt.left;
-    //        g_OrigWndPos.y = rt.top;
-    //        g_MovingMainWnd = true;
-    //        SetCapture(hWnd);
-    //        SetCursor(LoadCursor(NULL, IDC_SIZEALL));
-    //    }
-    //    return 0;
-    //case WM_LBUTTONUP:
-    //    printf("WM_BUTTONUP\n");
-    //    ReleaseCapture();
-    //    return 0;
-    //case WM_CAPTURECHANGED:
-    //    g_MovingMainWnd = (HWND)lParam == hWnd;
-    //    printf("WM_CAPTURECHANGED\n");
-    //    printf("g_MovingMainWnd = %s\n", (g_MovingMainWnd ? "true" : "false"));
-    //    return 0;
-    //case WM_COMMAND:
-    //{
-    //    int wmId = LOWORD(wParam);
-    //    // Parse the menu selections:
-    //    switch (wmId)
-    //    {
-    //    case IDM_ABOUT:
-    //        DialogBox(hInst, MAKEINTRESOURCE(IDD_ABOUTBOX), hWnd, About);
-    //        break;
-    //    case IDM_EXIT:
-    //        DestroyWindow(hWnd);
-    //        break;
-    //    default:
-    //        return DefWindowProc(hWnd, message, wParam, lParam);
-    //    }
-    //}
-    //break;
-    //case WM_PAINT:
-    //{
-    //    PAINTSTRUCT ps;
-    //    HDC hdc = BeginPaint(hWnd, &ps);
-    //    // TODO: Add any drawing code that uses hdc here...
-    //    EndPaint(hWnd, &ps);
-    //}
-    //break;
-    //case WM_DESTROY:
-    //    PostQuitMessage(0);
-    //    break;
-    //default:
-    //    return DefWindowProc(hWnd, message, wParam, lParam);
-    //}
-    //if (!g_runYet)
-    //{
-    //    MainWindow mw;
-    //    mw.runMe(hWnd);
-    //    g_runYet = true;
-    //}
-    //return 0;
 }
 
 // Message handler for about box.
