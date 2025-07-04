@@ -133,11 +133,16 @@
     <ClInclude Include="MainWindow.h" />
     <ClInclude Include="NativeScrollingScreenshot.h" />
     <ClInclude Include="Resource.h" />
+    <ClInclude Include="ScreenshotService.h" />
+    <ClInclude Include="ScreenshotServiceTests.h" />
     <ClInclude Include="targetver.h" />
   </ItemGroup>
   <ItemGroup>
     <ClCompile Include="MainWindow.cpp" />
     <ClCompile Include="NativeScrollingScreenshot.cpp" />
+    <ClCompile Include="ScreenshotService.cpp" />
+    <ClCompile Include="ScreenshotServiceTestRunner.cpp" />
+    <ClCompile Include="ScreenshotServiceTests.cpp" />
   </ItemGroup>
   <ItemGroup>
     <ResourceCompile Include="NativeScrollingScreenshot.rc" />

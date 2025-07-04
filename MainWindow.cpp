@@ -4,6 +4,7 @@
 #include "framework.h"
 #include "resource.h"
 #include "MainWindow.h"
+#include "ScreenshotService.h" // Include the new screenshot service
 
 #include <cstdio>
 #include <Windows.h>
@@ -40,11 +41,6 @@ using namespace Windows::Foundation::Numerics;
 HWND MainWindow::_childhWnd;
 HINSTANCE MainWindow::_hInstance;
 HWND MainWindow::_hWnd;
-HWND MainWindow::_overlayWnd = NULL;
-bool MainWindow::_isSelecting = false;
-POINT MainWindow::_startPoint = {0, 0};
-POINT MainWindow::_endPoint = {0, 0};
-std::optional<ScreenshotArea> MainWindow::_currentSelection = std::nullopt;
 
 namespace
 {
@@ -182,242 +178,76 @@ public:
         std::this_thread::sleep_for(std::chrono::milliseconds(1000));
         PostMessage(MainWindow::_hWnd, WM_SYSCOMMAND, SC_RESTORE, 0);
     }
-    
-    static void screenshotAreaAction(const ScreenshotArea& area) {
-        printf("Performing area screenshot action: left=%d, top=%d, width=%d, height=%d\n", 
-               area.left, area.top, area.width, area.height);
-        
-        // Hide the overlay window while taking the screenshot
-        if (MainWindow::_overlayWnd) {
-            ShowWindow(MainWindow::_overlayWnd, SW_HIDE);
-        }
-        
-        // Allow the screen to update without the overlay
-        std::this_thread::sleep_for(std::chrono::milliseconds(100));
-        
-        // Capture the specified area
-        MainWindow::captureScreenshot(area);
-        
-        // Clean up
-        if (MainWindow::_overlayWnd) {
-            DestroyWindow(MainWindow::_overlayWnd);
-            MainWindow::_overlayWnd = NULL;
-        }
-        
-        MainWindow::_isSelecting = false;
-        MainWindow::_currentSelection = std::nullopt;
-    }
 };
 
 // Global command processor
 std::unique_ptr<CommandProcessor> g_commandProcessor;
 
+// Global screenshot service
+std::shared_ptr<IScreenshotService> g_screenshotService;
+
+// Declaration of the CreateScreenshotService function (implemented in ScreenshotService.cpp)
+extern std::shared_ptr<IScreenshotService> CreateScreenshotService(HWND mainWindow, HINSTANCE hInstance);
+
+// Implementation of the screenshot callback
+class MainWindowScreenshotCallback : public IScreenshotCallback {
+public:
+    void OnScreenshotCaptured(bool success) override {
+        printf("Screenshot captured: %s\n", success ? "SUCCESS" : "FAILED");
+        
+        // Add debug output for better troubleshooting
+        if (success) {
+            OutputDebugString(L"Screenshot callback: Capture successful\n");
+            // We could add additional UI feedback here
+        } else {
+            OutputDebugString(L"Screenshot callback: Capture failed\n");
+            // Display an error message to the user
+            MessageBox(MainWindow::_hWnd, L"Failed to capture screenshot.", 
+                      L"Screenshot Error", MB_OK | MB_ICONERROR);
+        }
+    }
+    
+    void OnSelectionCancelled() override {
+        printf("Screenshot selection cancelled\n");
+        OutputDebugString(L"Screenshot callback: Selection cancelled\n");
+        // Optionally provide feedback about cancellation
+    }
+};
+
 void MainWindow::takeScreenshotHandler(winrt::Windows::Foundation::IInspectable const&,
     winrt::Windows::UI::Xaml::RoutedEventArgs const&) {
     printf("Screenshot button clicked\n");
+    OutputDebugString(L"Take Screenshot button clicked\n");
     
-    // Register and create the overlay window
-    registerOverlayClass(_hInstance);
-    _overlayWnd = createOverlayWindow();
-    
-    if (_overlayWnd) {
-        // Show the overlay window
-        ShowWindow(_overlayWnd, SW_SHOW);
-        UpdateWindow(_overlayWnd);
-        SetForegroundWindow(_overlayWnd);
-        
-        printf("Overlay window created for screenshot selection\n");
-    }
-}
-
-ATOM MainWindow::registerOverlayClass(HINSTANCE hInstance) {
-    WNDCLASSEX wcex = {};
-    
-    wcex.cbSize = sizeof(WNDCLASSEX);
-    wcex.style = CS_HREDRAW | CS_VREDRAW;
-    wcex.lpfnWndProc = overlayWndProc;
-    wcex.cbClsExtra = 0;
-    wcex.cbWndExtra = 0;
-    wcex.hInstance = hInstance;
-    wcex.hCursor = LoadCursor(nullptr, IDC_CROSS);  // Use crosshair cursor
-    wcex.lpszClassName = L"OverlayWindowClass";
-    
-    return RegisterClassEx(&wcex);
-}
-
-HWND MainWindow::createOverlayWindow() {
-    // Get the screen dimensions
-    int screenWidth = GetSystemMetrics(SM_CXSCREEN);
-    int screenHeight = GetSystemMetrics(SM_CYSCREEN);
-    
-    // Create a transparent, topmost window covering the entire screen
-    HWND hwnd = CreateWindowEx(
-        WS_EX_TOPMOST | WS_EX_LAYERED | WS_EX_TRANSPARENT,
-        L"OverlayWindowClass",
-        L"Screenshot Overlay",
-        WS_POPUP,
-        0, 0, screenWidth, screenHeight,
-        NULL, NULL, _hInstance, NULL
-    );
-    
-    if (hwnd) {
-        // Set the window to be semi-transparent
-        SetLayeredWindowAttributes(hwnd, 0, 128, LWA_ALPHA);
-        
-        // Make the window receive mouse input events
-        SetWindowLong(hwnd, GWL_EXSTYLE, 
-            GetWindowLong(hwnd, GWL_EXSTYLE) & ~WS_EX_TRANSPARENT);
-    }
-    
-    return hwnd;
-}
-
-LRESULT CALLBACK MainWindow::overlayWndProc(HWND hWnd, UINT message, WPARAM wParam, LPARAM lParam) {
-    switch (message) {
-    case WM_LBUTTONDOWN:
-        _isSelecting = true;
-        _startPoint.x = LOWORD(lParam);
-        _startPoint.y = HIWORD(lParam);
-        _endPoint = _startPoint;
-        SetCapture(hWnd);
-        return 0;
-        
-    case WM_MOUSEMOVE:
-        if (_isSelecting) {
-            // Update the end point
-            _endPoint.x = LOWORD(lParam);
-            _endPoint.y = HIWORD(lParam);
-            
-            // Force a redraw to show the selection rectangle
-            InvalidateRect(hWnd, NULL, TRUE);
+    // Use the screenshot service to take a screenshot
+    if (g_screenshotService) {
+        try {
+            OutputDebugString(L"Starting screenshot process\n");
+            g_screenshotService->StartScreenshotProcess();
+            OutputDebugString(L"Screenshot process started\n");
         }
-        return 0;
-        
-    case WM_LBUTTONUP:
-        if (_isSelecting) {
-            _isSelecting = false;
-            ReleaseCapture();
+        catch (const std::exception& e) {
+            char buf[512];
+            sprintf_s(buf, "Exception during screenshot process: %s\n", e.what());
+            OutputDebugStringA(buf);
             
-            // Get the final end point
-            _endPoint.x = LOWORD(lParam);
-            _endPoint.y = HIWORD(lParam);
-            
-            // Calculate the selection area
-            int left = min(_startPoint.x, _endPoint.x);
-            int top = min(_startPoint.y, _endPoint.y);
-            int width = abs(_endPoint.x - _startPoint.x);
-            int height = abs(_endPoint.y - _startPoint.y);
-            
-            // Ensure minimum size
-            if (width > 5 && height > 5) {
-                _currentSelection = ScreenshotArea{left, top, width, height};
-                
-                // Perform the screenshot of the selected area
-                if (g_commandProcessor && _currentSelection) {
-                    g_commandProcessor->enqueueCommand(
-                        ActionType::SCREENSHOT_AREA, 
-                        [area = *_currentSelection]() { 
-                            Actions::screenshotAreaAction(area); 
-                        }
-                    );
-                }
-            } else {
-                // Cancel if the selection is too small
-                if (_overlayWnd) {
-                    DestroyWindow(_overlayWnd);
-                    _overlayWnd = NULL;
-                }
-            }
+            // Show error to user
+            MessageBox(MainWindow::_hWnd, L"Failed to start screenshot process.", 
+                      L"Screenshot Error", MB_OK | MB_ICONERROR);
         }
-        return 0;
-        
-    case WM_PAINT:
-    {
-        PAINTSTRUCT ps;
-        HDC hdc = BeginPaint(hWnd, &ps);
-        
-        // Create a transparent background
-        RECT clientRect;
-        GetClientRect(hWnd, &clientRect);
-        
-        // Fill with a semi-transparent color
-        HBRUSH backgroundBrush = CreateSolidBrush(RGB(100, 100, 100));
-        FillRect(hdc, &clientRect, backgroundBrush);
-        DeleteObject(backgroundBrush);
-        
-        // Draw the selection rectangle if selecting
-        if (_isSelecting) {
-            RECT selectionRect = {
-                min(_startPoint.x, _endPoint.x),
-                min(_startPoint.y, _endPoint.y),
-                max(_startPoint.x, _endPoint.x),
-                max(_startPoint.y, _endPoint.y)
-            };
+        catch (...) {
+            OutputDebugString(L"Unknown exception during screenshot process\n");
             
-            // Draw a white rectangle for the selection
-            HBRUSH selectBrush = CreateSolidBrush(RGB(255, 255, 255));
-            FrameRect(hdc, &selectionRect, selectBrush);
-            DeleteObject(selectBrush);
-            
-            // Draw dimension info
-            WCHAR dimensionText[50];
-            swprintf_s(dimensionText, L"%dx%d", 
-                selectionRect.right - selectionRect.left,
-                selectionRect.bottom - selectionRect.top);
-            
-            SetBkMode(hdc, TRANSPARENT);
-            SetTextColor(hdc, RGB(255, 255, 255));
-            TextOut(hdc, selectionRect.right + 5, selectionRect.bottom + 5, 
-                dimensionText, wcslen(dimensionText));
+            // Show error to user
+            MessageBox(MainWindow::_hWnd, L"An unknown error occurred when trying to take a screenshot.", 
+                      L"Screenshot Error", MB_OK | MB_ICONERROR);
         }
-        
-        EndPaint(hWnd, &ps);
-        return 0;
     }
-        
-    case WM_KEYDOWN:
-        // Allow ESC to cancel the selection
-        if (wParam == VK_ESCAPE) {
-            if (_overlayWnd) {
-                DestroyWindow(_overlayWnd);
-                _overlayWnd = NULL;
-            }
-            return 0;
-        }
-        break;
-        
-    case WM_DESTROY:
-        _overlayWnd = NULL;
-        return 0;
+    else {
+        OutputDebugString(L"Screenshot service is not initialized\n");
+        MessageBox(MainWindow::_hWnd, L"Screenshot service is not initialized.", 
+                  L"Screenshot Error", MB_OK | MB_ICONERROR);
     }
-    
-    return DefWindowProc(hWnd, message, wParam, lParam);
-}
-
-void MainWindow::captureScreenshot(const ScreenshotArea& area) {
-    // Create compatible DC, bitmap and other objects needed for the screenshot
-    HDC hdcScreen = GetDC(NULL);
-    HDC hdcMemDC = CreateCompatibleDC(hdcScreen);
-    HBITMAP hbmScreen = CreateCompatibleBitmap(hdcScreen, area.width, area.height);
-    HGDIOBJ hOldObject = SelectObject(hdcMemDC, hbmScreen);
-    
-    // Copy screen to bitmap
-    BitBlt(hdcMemDC, 0, 0, area.width, area.height, 
-           hdcScreen, area.left, area.top, SRCCOPY);
-    
-    // Save the screenshot to clipboard
-    OpenClipboard(NULL);
-    EmptyClipboard();
-    SetClipboardData(CF_BITMAP, hbmScreen);
-    CloseClipboard();
-    
-    // Clean up
-    SelectObject(hdcMemDC, hOldObject);
-    DeleteObject(hbmScreen);
-    DeleteDC(hdcMemDC);
-    ReleaseDC(NULL, hdcScreen);
-    
-    printf("Screenshot captured and saved to clipboard\n");
 }
 
 HINSTANCE g_hInstance = (HINSTANCE)GetModuleHandle(NULL);
@@ -477,6 +307,13 @@ int APIENTRY MainWindow::handleWinMain(_In_ HINSTANCE hInstance,
         MessageBox(NULL, L"Call to CreateWindow failed!", L"Error", NULL);
         return 0;
     }
+
+    // Create the screenshot service
+    g_screenshotService = CreateScreenshotService(_hWnd, hInstance);
+    
+    // Set up the screenshot callback
+    auto callback = std::make_shared<MainWindowScreenshotCallback>();
+    g_screenshotService->SetScreenshotCallback(callback);
 
     // Begin XAML Island section.
 
@@ -584,8 +421,6 @@ ATOM MainWindow::myRegisterClass(HINSTANCE hInstance)
 //
 BOOL MainWindow::initInstance(HINSTANCE hInstance, int nCmdShow)
 {
-
-
     hInst = hInstance; // Store instance handle in our global variable
 
     HWND hWnd = CreateWindowW(szWindowClass, szTitle, WS_OVERLAPPEDWINDOW,
