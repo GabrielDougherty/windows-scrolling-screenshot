@@ -186,6 +186,9 @@ std::unique_ptr<CommandProcessor> g_commandProcessor;
 // Global screenshot service
 std::shared_ptr<ScreenshotService> g_screenshotService;
 
+// Store the currently selected stitching method
+StitchingMethod g_currentStitchingMethod = StitchingMethod::OpenCV;
+
 // Declaration of the CreateScreenshotService function (implemented in ScreenshotService.cpp)
 extern std::shared_ptr<ScreenshotService> CreateScreenshotService(HWND mainWindow, HINSTANCE hInstance);
 
@@ -223,6 +226,39 @@ public:
                   MB_OK | MB_ICONINFORMATION);
     }
 };
+
+// Handler for the stitching method dropdown selection
+void MainWindow::stitchingMethodChangedHandler(winrt::Windows::Foundation::IInspectable const& sender,
+    winrt::Windows::UI::Xaml::Controls::SelectionChangedEventArgs const& args) {
+    
+    auto comboBox = sender.as<winrt::Windows::UI::Xaml::Controls::ComboBox>();
+    int selectedIndex = comboBox.SelectedIndex();
+    
+    // Map combobox selection to StitchingMethod
+    StitchingMethod selectedMethod;
+    switch (selectedIndex) {
+        case 0:  // OpenCV Feature Matching
+            selectedMethod = StitchingMethod::OpenCV;
+            break;
+        case 1:  // OpenCV Vertical Stacking
+            selectedMethod = StitchingMethod::OpenCVVertical;
+            break;
+        case 2:  // Simple Stacking
+            selectedMethod = StitchingMethod::Simple;
+            break;
+        default:
+            selectedMethod = StitchingMethod::OpenCV;  // Default to OpenCV
+    }
+    
+    // Update the global stitching method
+    g_currentStitchingMethod = selectedMethod;
+    
+    // Update the screenshot service
+    if (g_screenshotService) {
+        OutputDebugString(L"Updating stitching method\n");
+        g_screenshotService->SetStitchingMethod(selectedMethod);
+    }
+}
 
 void MainWindow::takeScreenshotHandler(winrt::Windows::Foundation::IInspectable const&,
     winrt::Windows::UI::Xaml::RoutedEventArgs const&) {
@@ -315,7 +351,7 @@ int APIENTRY MainWindow::handleWinMain(_In_ HINSTANCE hInstance,
 
     _hWnd = CreateWindow(
         szWindowClass,
-        L"Windows c++ Win32 Desktop App",
+        L"Scrolling Screenshot Application",
         WS_OVERLAPPEDWINDOW | WS_VISIBLE,
         CW_USEDEFAULT, CW_USEDEFAULT, CW_USEDEFAULT, CW_USEDEFAULT,
         NULL,
@@ -335,6 +371,9 @@ int APIENTRY MainWindow::handleWinMain(_In_ HINSTANCE hInstance,
     // Set up the screenshot callback
     auto callback = std::make_shared<MainWindowScreenshotCallback>();
     g_screenshotService->SetScreenshotCallback(callback);
+    
+    // Set the default stitching method
+    g_screenshotService->SetStitchingMethod(g_currentStitchingMethod);
 
     // Begin XAML Island section.
 
@@ -366,24 +405,72 @@ int APIENTRY MainWindow::handleWinMain(_In_ HINSTANCE hInstance,
     // Create the XAML content.
     Windows::UI::Xaml::Controls::StackPanel xamlContainer;
     xamlContainer.Background(Windows::UI::Xaml::Media::SolidColorBrush{ Windows::UI::Colors::LightGray() });
-    Windows::UI::Xaml::Controls::TextBlock tb;
-    tb.Text(L"Hello World from Xaml Islands!");
-    tb.VerticalAlignment(Windows::UI::Xaml::VerticalAlignment::Center);
-    tb.HorizontalAlignment(Windows::UI::Xaml::HorizontalAlignment::Center);
-    tb.FontSize(48);
-
-    Windows::UI::Xaml::Controls::Button b;
-    b.Width(300);
-    b.Height(200);
-    b.Content(box_value(L"Scroll Once"));
-    Windows::UI::Xaml::Controls::Button b2;
-    b2.Width(300);
-    b2.Height(200);
-    b2.Content(box_value(L"Take Screenshot"));
-    b2.Click({ this, &MainWindow::takeScreenshotHandler });
-    xamlContainer.Children().Append(tb);
-    xamlContainer.Children().Append(b2);
-    //xamlContainer.Children().Append(b);
+    
+    // Add application title
+    Windows::UI::Xaml::Controls::TextBlock titleBlock;
+    titleBlock.Text(L"Scrolling Screenshot Utility");
+    titleBlock.VerticalAlignment(Windows::UI::Xaml::VerticalAlignment::Center);
+    titleBlock.HorizontalAlignment(Windows::UI::Xaml::HorizontalAlignment::Center);
+    titleBlock.FontSize(24);
+    titleBlock.Margin(Windows::UI::Xaml::Thickness{0, 10, 0, 10});
+    xamlContainer.Children().Append(titleBlock);
+    
+    // Add stitching method selection with label
+    Windows::UI::Xaml::Controls::StackPanel stitchingPanel;
+    stitchingPanel.Orientation(Windows::UI::Xaml::Controls::Orientation::Horizontal);
+    stitchingPanel.Margin(Windows::UI::Xaml::Thickness{10, 10, 10, 10});
+    stitchingPanel.HorizontalAlignment(Windows::UI::Xaml::HorizontalAlignment::Center);
+    
+    Windows::UI::Xaml::Controls::TextBlock stitchLabel;
+    stitchLabel.Text(L"Stitching Method: ");
+    stitchLabel.VerticalAlignment(Windows::UI::Xaml::VerticalAlignment::Center);
+    stitchLabel.Margin(Windows::UI::Xaml::Thickness{0, 0, 10, 0});
+    stitchingPanel.Children().Append(stitchLabel);
+    
+    Windows::UI::Xaml::Controls::ComboBox stitchComboBox;
+    stitchComboBox.Width(200);
+    
+    // Add stitching method options
+    auto item1 = winrt::Windows::UI::Xaml::Controls::ComboBoxItem();
+    item1.Content(box_value(L"OpenCV Feature Matching"));
+    stitchComboBox.Items().Append(item1);
+    
+    auto item2 = winrt::Windows::UI::Xaml::Controls::ComboBoxItem();
+    item2.Content(box_value(L"OpenCV Vertical Stacking"));
+    stitchComboBox.Items().Append(item2);
+    
+    auto item3 = winrt::Windows::UI::Xaml::Controls::ComboBoxItem();
+    item3.Content(box_value(L"Simple Stacking"));
+    stitchComboBox.Items().Append(item3);
+    
+    // Set default selection
+    stitchComboBox.SelectedIndex(0); // OpenCV feature matching by default
+    
+    // Add event handler for selection changes
+    stitchComboBox.SelectionChanged({ this, &MainWindow::stitchingMethodChangedHandler });
+    
+    stitchingPanel.Children().Append(stitchComboBox);
+    xamlContainer.Children().Append(stitchingPanel);
+    
+    // Add description
+    Windows::UI::Xaml::Controls::TextBlock descriptionBlock;
+    descriptionBlock.Text(L"Capture scrolling screenshots and automatically stitch them together");
+    descriptionBlock.VerticalAlignment(Windows::UI::Xaml::VerticalAlignment::Center);
+    descriptionBlock.HorizontalAlignment(Windows::UI::Xaml::HorizontalAlignment::Center);
+    descriptionBlock.FontSize(14);
+    descriptionBlock.Margin(Windows::UI::Xaml::Thickness{0, 5, 0, 15});
+    xamlContainer.Children().Append(descriptionBlock);
+    
+    // Add the screenshot button
+    Windows::UI::Xaml::Controls::Button screenshotButton;
+    screenshotButton.Width(300);
+    screenshotButton.Height(60);
+    screenshotButton.Content(box_value(L"Take Scrolling Screenshot"));
+    screenshotButton.Click({ this, &MainWindow::takeScreenshotHandler });
+    screenshotButton.HorizontalAlignment(Windows::UI::Xaml::HorizontalAlignment::Center);
+    screenshotButton.Margin(Windows::UI::Xaml::Thickness{0, 0, 0, 10});
+    xamlContainer.Children().Append(screenshotButton);
+    
     xamlContainer.UpdateLayout();
     desktopSource.Content(xamlContainer);
 
@@ -438,7 +525,7 @@ ATOM MainWindow::myRegisterClass(HINSTANCE hInstance)
 //   COMMENTS:
 //
 //        In this function, we save the instance handle in a global variable and
-        //        create and display the main program window.
+//        create and display the main program window.
 //
 BOOL MainWindow::initInstance(HINSTANCE hInstance, int nCmdShow)
 {
@@ -473,7 +560,7 @@ LRESULT CALLBACK WndProc(HWND hWnd, UINT messageCode, WPARAM wParam, LPARAM lPar
 {
     PAINTSTRUCT ps;
     HDC hdc;
-    wchar_t greeting[] = L"Hello World in Win32!";
+    wchar_t greeting[] = L"Scrolling Screenshot Application";
     RECT rcClient;
 
     switch (messageCode)

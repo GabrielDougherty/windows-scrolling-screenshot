@@ -28,6 +28,13 @@ public:
     virtual void OnSelectionCancelled() = 0;
 };
 
+// Enum for different stitching methods
+enum class StitchingMethod {
+    Simple,              // Simple vertical stacking
+    OpenCV,              // OpenCV stitching with feature matching
+    OpenCVVertical       // OpenCV simple vertical stitching
+};
+
 // Main service class for screenshot functionality
 class ScreenshotService {
 public:
@@ -39,6 +46,9 @@ public:
     
     // Set the callback to receive notifications
     virtual void SetScreenshotCallback(std::shared_ptr<ScreenshotCallback> callback) = 0;
+    
+    // Set the stitching method to use
+    virtual void SetStitchingMethod(StitchingMethod method) = 0;
     
     // Window procedure message handler
     virtual LRESULT HandleOverlayWindowMessage(HWND hWnd, UINT message, WPARAM wParam, LPARAM lParam) = 0;

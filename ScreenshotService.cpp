@@ -1,14 +1,20 @@
 #include "ScreenshotService.h"
+#include "ImageStitcher.h"
 #include <thread>
 #include <chrono>
 #include <vector>
-#include <algorithm>
+#include <algorithm> // For min, max functions
+
+// Use std::min and std::max to avoid naming conflicts
+using std::min;
+using std::max;
 
 // Implementation of the ScreenshotService
 class ScreenshotServiceImpl : public ScreenshotService {
 public:
     ScreenshotServiceImpl(HWND mainWindow, HINSTANCE hInstance)
-        : _mainWindow(mainWindow), _hInstance(hInstance), _overlayWnd(nullptr)
+        : _mainWindow(mainWindow), _hInstance(hInstance), _overlayWnd(nullptr),
+          _stitchingMethod(StitchingMethod::OpenCV) // Default to OpenCV stitching
     {}
 
     ~ScreenshotServiceImpl() {
@@ -57,6 +63,10 @@ public:
     
     void SetScreenshotCallback(std::shared_ptr<ScreenshotCallback> callback) override {
         _callback = callback;
+    }
+    
+    void SetStitchingMethod(StitchingMethod method) override {
+        _stitchingMethod = method;
     }
     
     LRESULT HandleOverlayWindowMessage(HWND hWnd, UINT message, WPARAM wParam, LPARAM lParam) override {
@@ -371,15 +381,41 @@ private:
                 }
                 
                 if (screenshots.size() > 1) {
-                    // Combine all screenshots vertically
+                    // Combine all screenshots based on the selected stitching method
                     wchar_t buffer[256];
-                    swprintf_s(buffer, L"Combining %d screenshots\n", (int)screenshots.size());
+                    swprintf_s(buffer, L"Combining %d screenshots using method: %d\n", 
+                              (int)screenshots.size(), static_cast<int>(_stitchingMethod));
                     OutputDebugString(buffer);
                     
-                    HBITMAP combinedBitmap = CombineVertically(screenshots);
+                    HBITMAP combinedBitmap = NULL;
+                    
+                    // Choose the appropriate stitching method
+                    switch (_stitchingMethod) {
+                        case StitchingMethod::OpenCV:
+                            combinedBitmap = ImageStitcher::StitchImagesWithFeatureMatching(screenshots);
+                            break;
+                        
+                        case StitchingMethod::OpenCVVertical:
+                            combinedBitmap = ImageStitcher::StitchImagesVertically(screenshots);
+                            break;
+                        
+                        case StitchingMethod::Simple:
+                        default:
+                            combinedBitmap = CombineVertically(screenshots);
+                            break;
+                    }
                     
                     // Save to clipboard
-                    bool success = SaveToClipboard(combinedBitmap);
+                    bool success = false;
+                    if (combinedBitmap) {
+                        success = SaveToClipboard(combinedBitmap);
+                    } else {
+                        // If OpenCV stitching failed, fall back to simple approach
+                        combinedBitmap = CombineVertically(screenshots);
+                        if (combinedBitmap) {
+                            success = SaveToClipboard(combinedBitmap);
+                        }
+                    }
                     
                     // Clean up individual screenshots
                     for (auto& bmp : screenshots) {
@@ -757,6 +793,9 @@ private:
     bool _isSelecting = false;
     POINT _startPoint = { 0, 0 };
     POINT _endPoint = { 0, 0 };
+    
+    // The stitching method to use for combining screenshots
+    StitchingMethod _stitchingMethod;
 };
 
 // Factory function implementation

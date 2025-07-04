@@ -36,6 +36,9 @@
     <ClInclude Include="ScreenshotServiceTests.h">
       <Filter>Header Files</Filter>
     </ClInclude>
+    <ClInclude Include="ImageStitcher.h">
+      <Filter>Header Files</Filter>
+    </ClInclude>
   </ItemGroup>
   <ItemGroup>
     <ClCompile Include="NativeScrollingScreenshot.cpp">
@@ -51,6 +54,9 @@
       <Filter>Source Files</Filter>
     </ClCompile>
     <ClCompile Include="ScreenshotServiceTestRunner.cpp">
+      <Filter>Source Files</Filter>
+    </ClCompile>
+    <ClCompile Include="ImageStitcher.cpp">
       <Filter>Source Files</Filter>
     </ClCompile>
   </ItemGroup>

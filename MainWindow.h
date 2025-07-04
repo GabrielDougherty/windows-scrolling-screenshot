@@ -12,6 +12,7 @@ public:
     ATOM myRegisterClass(HINSTANCE hInstance);
     BOOL initInstance(HINSTANCE hInstance, int nCmdShow);
     void takeScreenshotHandler(winrt::Windows::Foundation::IInspectable const&, winrt::Windows::UI::Xaml::RoutedEventArgs const&);
+    void stitchingMethodChangedHandler(winrt::Windows::Foundation::IInspectable const&, winrt::Windows::UI::Xaml::Controls::SelectionChangedEventArgs const&);
 
     static HWND _hWnd;
     static HWND _childhWnd;
