@@ -197,6 +197,18 @@ HBITMAP ImageStitcher::StitchImagesWithFeatureMatching(const std::vector<HBITMAP
                                                 std::sort(yDisplacements.begin(), yDisplacements.end());
                                                 double medianYDisplacement = yDisplacements[yDisplacements.size() / 2];
                                                 
+                                                // Check for suspiciously consistent displacements that might indicate repetitive content
+                                                // Count how many displacements are very close to the median
+                                                int consistentCount = 0;
+                                                for (double disp : yDisplacements) {
+                                                    if (abs(disp - medianYDisplacement) < 5.0) {
+                                                        consistentCount++;
+                                                    }
+                                                }
+                                                
+                                                // If too many matches have identical displacement, it's likely repetitive content
+                                                bool likelyRepetitiveContent = (consistentCount > yDisplacements.size() * 0.7);
+                                                
                                                 // Convert displacement to overlap amount
                                                 // The displacement tells us how much the images have shifted
                                                 // A negative displacement means the new image shows content further down
@@ -206,7 +218,17 @@ HBITMAP ImageStitcher::StitchImagesWithFeatureMatching(const std::vector<HBITMAP
                                                 int maxPossibleOverlap = std::min(currentImage.rows - 10, result.rows / 2);
                                                 bestOverlap = std::max(5, std::min(bestOverlap, maxPossibleOverlap));
                                                 
-                                                foundGoodAlignment = true;
+                                                // If we suspect repetitive content or get suspicious results, be more conservative
+                                                if (likelyRepetitiveContent || abs(medianYDisplacement) > sectionHeight * 1.5) {
+                                                    char repetitiveBuf[256];
+                                                    sprintf_s(repetitiveBuf, "ImageStitcher: Detected likely repetitive content or suspicious displacement (%.2f), using conservative overlap\n", medianYDisplacement);
+                                                    OutputDebugStringA(repetitiveBuf);
+                                                    
+                                                    bestOverlap = std::min(sectionHeight / 3, 40); // Much smaller conservative overlap
+                                                    foundGoodAlignment = true; // Still use blending but with conservative overlap
+                                                } else {
+                                                    foundGoodAlignment = true;
+                                                }
                                                 
                                                 char dispBuf[256];
                                                 sprintf_s(dispBuf, "ImageStitcher: Calculated optimal overlap: %d pixels (from median displacement: %.2f, section height: %d, max possible: %d)\n", 
@@ -309,29 +331,26 @@ HBITMAP ImageStitcher::StitchImagesWithFeatureMatching(const std::vector<HBITMAP
                              bestOverlap, bestScore);
                     OutputDebugStringA(tmplBuf);
                 } else {
-                    // If template matching fails, use a conservative small overlap with blending
-                    bestOverlap = std::min(20, currentImage.rows / 10);
-                    if (bestOverlap > 0) {
-                        foundGoodAlignment = true; // Enable blending for conservative overlap
-                        char conservativeBuf[256];
-                        sprintf_s(conservativeBuf, "ImageStitcher: Using conservative overlap with blending: %d pixels\n", bestOverlap);
-                        OutputDebugStringA(conservativeBuf);
-                    } else {
-                        OutputDebugStringA("ImageStitcher: No overlap possible, placing adjacent\n");
-                    }
+                    // If template matching fails, use a conservative overlap based on typical scroll distance
+                    // For most content, a scroll typically moves 1/3 to 1/2 of the visible area
+                    bestOverlap = std::min(std::max(sectionHeight / 3, 30), currentImage.rows / 5);
+                    foundGoodAlignment = true; // Enable blending for conservative overlap
+                    char conservativeBuf[256];
+                    sprintf_s(conservativeBuf, "ImageStitcher: Using conservative scroll-based overlap with blending: %d pixels\n", bestOverlap);
+                    OutputDebugStringA(conservativeBuf);
                 }
             }
             
             // Apply the calculated overlap and extend the result image
             // But first, validate that the overlap makes sense
-            if (foundGoodAlignment && bestOverlap < 10 && bestOverlap > 0) {
-                // Very small overlaps might indicate false matches, especially for repetitive content
+            if (foundGoodAlignment && bestOverlap < 15 && bestOverlap > 0) {
+                // Small overlaps often indicate false matches, especially for repetitive content like code
                 char warningBuf[256];
-                sprintf_s(warningBuf, "ImageStitcher: Small overlap (%d pixels) detected - this might be a false match\n", bestOverlap);
+                sprintf_s(warningBuf, "ImageStitcher: Very small overlap (%d pixels) detected - likely false match on repetitive content\n", bestOverlap);
                 OutputDebugStringA(warningBuf);
                 
-                // For very small overlaps, fall back to conservative placement with blending
-                bestOverlap = std::min(30, currentImage.rows / 8);
+                // For small overlaps, use a more conservative approach
+                bestOverlap = std::min(std::max(sectionHeight / 4, 25), currentImage.rows / 6);
                 // Keep foundGoodAlignment = true so we still blend with the conservative overlap
                 
                 sprintf_s(warningBuf, "ImageStitcher: Using conservative overlap with blending: %d pixels\n", bestOverlap);
