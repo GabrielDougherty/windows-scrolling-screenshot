@@ -1,4 +1,12 @@
 @echo off
+echo Killing any running instances of NativeScrollingScreenshot...
+taskkill /F /IM NativeScrollingScreenshot.exe >nul 2>&1
+if %errorlevel% == 0 (
+    echo Killed running NativeScrollingScreenshot.exe
+) else (
+    echo No running instances found
+)
+
 echo Installing vcpkg dependencies...
 vcpkg install --triplet x64-windows
 

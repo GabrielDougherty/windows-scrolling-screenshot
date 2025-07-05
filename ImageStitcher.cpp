@@ -100,18 +100,9 @@ HBITMAP ImageStitcher::StitchImagesWithFeatureMatching(const std::vector<HBITMAP
                     cv::cvtColor(previousSection, prevGray, cv::COLOR_BGRA2GRAY);
                     cv::cvtColor(currentImage, currGray, cv::COLOR_BGRA2GRAY);
                     
-                    // Try SURF first, fallback to ORB if SURF fails
-                    cv::Ptr<cv::Feature2D> detector;
-                    bool usingSURF = false;
-                    try {
-                        detector = cv::xfeatures2d::SURF::create(400);
-                        usingSURF = true;
-                        OutputDebugStringA("ImageStitcher: Using SURF detector\n");
-                    } catch (...) {
-                        OutputDebugStringA("ImageStitcher: SURF not available, using ORB detector\n");
-                        detector = cv::ORB::create(1000);
-                        usingSURF = false;
-                    }
+                    // Use ORB detector (SURF is not available in this OpenCV build)
+                    cv::Ptr<cv::Feature2D> detector = cv::ORB::create(1500);
+                    OutputDebugStringA("ImageStitcher: Using ORB detector\n");
                     
                     std::vector<cv::KeyPoint> keypointsPrev, keypointsCurr;
                     cv::Mat descriptorsPrev, descriptorsCurr;
@@ -127,20 +118,15 @@ HBITMAP ImageStitcher::StitchImagesWithFeatureMatching(const std::vector<HBITMAP
                     if (keypointsPrev.size() > 4 && keypointsCurr.size() > 4 && 
                         !descriptorsPrev.empty() && !descriptorsCurr.empty()) {
                         
-                        // Match features
+                        // Match features using Hamming distance for ORB
                         std::vector<cv::DMatch> matches;
-                        cv::Ptr<cv::DescriptorMatcher> matcher;
-                        if (usingSURF) {
-                            matcher = cv::DescriptorMatcher::create(cv::DescriptorMatcher::FLANNBASED);
-                        } else {
-                            matcher = cv::DescriptorMatcher::create(cv::DescriptorMatcher::BRUTEFORCE_HAMMING);
-                        }
+                        cv::Ptr<cv::DescriptorMatcher> matcher = cv::DescriptorMatcher::create(cv::DescriptorMatcher::BRUTEFORCE_HAMMING);
                         
                         try {
                             matcher->match(descriptorsCurr, descriptorsPrev, matches);
                             
                             if (!matches.empty()) {
-                                // Filter good matches
+                                // Filter good matches for ORB
                                 double maxDist = 0, minDist = 100;
                                 for (const auto& match : matches) {
                                     double dist = match.distance;
@@ -149,10 +135,10 @@ HBITMAP ImageStitcher::StitchImagesWithFeatureMatching(const std::vector<HBITMAP
                                 }
                                 
                                 std::vector<cv::DMatch> goodMatches;
-                                double threshold = usingSURF ? std::max(minDist * 3.0, 50.0) : std::max(minDist * 2.0, 30.0);
+                                double threshold = std::max(minDist * 2.5, 40.0); // More lenient threshold for ORB
                                 
                                 for (const auto& match : matches) {
-                                    if (match.distance < threshold) {
+                                    if (match.distance <= threshold) {
                                         goodMatches.push_back(match);
                                     }
                                 }
@@ -163,9 +149,8 @@ HBITMAP ImageStitcher::StitchImagesWithFeatureMatching(const std::vector<HBITMAP
                                 OutputDebugStringA(matchBuf);
                                 
                                 if (goodMatches.size() >= 4) {
-                                    // Calculate the average Y displacement
-                                    double totalYDisplacement = 0;
-                                    int validDisplacements = 0;
+                                    // Calculate the average Y displacement using median instead of mean for robustness
+                                    std::vector<double> yDisplacements;
                                     
                                     for (const auto& match : goodMatches) {
                                         cv::Point2f ptCurr = keypointsCurr[match.queryIdx].pt;
@@ -175,25 +160,28 @@ HBITMAP ImageStitcher::StitchImagesWithFeatureMatching(const std::vector<HBITMAP
                                         // relative to the previous section
                                         double yDisplacement = ptPrev.y - ptCurr.y;
                                         
-                                        // Filter out unreasonable displacements
-                                        if (yDisplacement > -sectionHeight && yDisplacement < sectionHeight) {
-                                            totalYDisplacement += yDisplacement;
-                                            validDisplacements++;
+                                        // Filter out completely unreasonable displacements
+                                        if (yDisplacement > -sectionHeight * 2 && yDisplacement < sectionHeight * 2) {
+                                            yDisplacements.push_back(yDisplacement);
                                         }
                                     }
                                     
-                                    if (validDisplacements > 0) {
-                                        double avgYDisplacement = totalYDisplacement / validDisplacements;
+                                    if (yDisplacements.size() >= 3) {
+                                        // Use median displacement for robustness
+                                        std::sort(yDisplacements.begin(), yDisplacements.end());
+                                        double medianYDisplacement = yDisplacements[yDisplacements.size() / 2];
                                         
                                         // Convert displacement to overlap amount
-                                        bestOverlap = (int)(sectionHeight - avgYDisplacement);
-                                        bestOverlap = std::max(0, std::min(bestOverlap, sectionHeight));
+                                        bestOverlap = (int)(sectionHeight - medianYDisplacement);
+                                        
+                                        // Allow more flexible overlap range
+                                        bestOverlap = std::max(0, std::min(bestOverlap, std::min(sectionHeight, currentImage.rows - 10)));
                                         
                                         foundGoodAlignment = true;
                                         
                                         char dispBuf[256];
-                                        sprintf_s(dispBuf, "ImageStitcher: Calculated optimal overlap: %d pixels (from displacement: %.2f)\n", 
-                                                 bestOverlap, avgYDisplacement);
+                                        sprintf_s(dispBuf, "ImageStitcher: Calculated optimal overlap: %d pixels (from median displacement: %.2f, section height: %d)\n", 
+                                                 bestOverlap, medianYDisplacement, sectionHeight);
                                         OutputDebugStringA(dispBuf);
                                     }
                                 }
@@ -215,10 +203,10 @@ HBITMAP ImageStitcher::StitchImagesWithFeatureMatching(const std::vector<HBITMAP
             if (!foundGoodAlignment && !previousSection.empty()) {
                 OutputDebugStringA("ImageStitcher: Trying template matching for overlap detection\n");
                 
-                int maxTestOverlap = std::min(sectionHeight, currentImage.rows / 2);
+                int maxTestOverlap = std::min(sectionHeight, currentImage.rows - 10);
                 double bestScore = -1;
                 
-                for (int testOverlap = 10; testOverlap <= maxTestOverlap; testOverlap += 5) {
+                for (int testOverlap = 5; testOverlap <= maxTestOverlap; testOverlap += 3) {
                     if (testOverlap >= currentImage.rows) continue;
                     
                     // Get top section of current image
@@ -245,14 +233,23 @@ HBITMAP ImageStitcher::StitchImagesWithFeatureMatching(const std::vector<HBITMAP
                     }
                 }
                 
-                if (bestScore > 0.7) {  // Good template match threshold
+                if (bestScore > 0.5) {  // More lenient template match threshold
                     foundGoodAlignment = true;
                     char tmplBuf[256];
                     sprintf_s(tmplBuf, "ImageStitcher: Template matching found overlap: %d pixels (score: %.3f)\n", 
                              bestOverlap, bestScore);
                     OutputDebugStringA(tmplBuf);
                 } else {
-                    OutputDebugStringA("ImageStitcher: No good template match found\n");
+                    // If template matching fails, try a conservative small overlap
+                    bestOverlap = std::min(20, currentImage.rows / 10);
+                    if (bestOverlap > 0) {
+                        foundGoodAlignment = true;
+                        char conservativeBuf[256];
+                        sprintf_s(conservativeBuf, "ImageStitcher: Using conservative overlap: %d pixels\n", bestOverlap);
+                        OutputDebugStringA(conservativeBuf);
+                    } else {
+                        OutputDebugStringA("ImageStitcher: No overlap possible, placing adjacent\n");
+                    }
                 }
             }
             
@@ -273,15 +270,37 @@ HBITMAP ImageStitcher::StitchImagesWithFeatureMatching(const std::vector<HBITMAP
             cv::Mat currentRoi = newResult(currentRect);
             
             if (bestOverlap > 0 && foundGoodAlignment) {
-                // Blend the overlapping region
+                // Blend the overlapping region with gradient blending
                 cv::Rect overlapRect(0, currentYPos, 
                                    std::min(result.cols, currentImage.cols), 
                                    bestOverlap);
                 cv::Mat overlapRoi = newResult(overlapRect);
                 cv::Mat currentOverlap = currentImage(cv::Rect(0, 0, overlapRect.width, overlapRect.height));
                 
-                // Use weighted blending
-                cv::addWeighted(overlapRoi, 0.3, currentOverlap, 0.7, 0, overlapRoi);
+                // Create gradient mask for smooth blending
+                cv::Mat mask = cv::Mat::zeros(overlapRect.height, overlapRect.width, CV_32F);
+                for (int y = 0; y < overlapRect.height; y++) {
+                    float weight = (float)y / (float)overlapRect.height; // 0 to 1 from top to bottom
+                    mask.row(y).setTo(cv::Scalar(weight));
+                }
+                
+                // Apply gradient blending
+                cv::Mat blended;
+                overlapRoi.convertTo(blended, CV_32FC4);
+                cv::Mat currentOverlapF;
+                currentOverlap.convertTo(currentOverlapF, CV_32FC4);
+                
+                for (int c = 0; c < 4; c++) {
+                    cv::Mat channelExisting, channelCurrent, channelMask;
+                    cv::extractChannel(blended, channelExisting, c);
+                    cv::extractChannel(currentOverlapF, channelCurrent, c);
+                    cv::extractChannel(mask, channelMask, 0);
+                    
+                    cv::Mat channelResult = channelExisting.mul(1.0 - channelMask) + channelCurrent.mul(channelMask);
+                    cv::insertChannel(channelResult, blended, c);
+                }
+                
+                blended.convertTo(overlapRoi, CV_8UC4);
                 
                 // Copy non-overlapping part
                 if (bestOverlap < currentImage.rows) {
@@ -294,7 +313,7 @@ HBITMAP ImageStitcher::StitchImagesWithFeatureMatching(const std::vector<HBITMAP
                     currentNonOverlap.copyTo(nonOverlapRoi);
                 }
                 
-                OutputDebugStringA("ImageStitcher: Applied blended overlap\n");
+                OutputDebugStringA("ImageStitcher: Applied gradient blended overlap\n");
             } else {
                 // No overlap, just place adjacent
                 currentImage.copyTo(currentRoi);
