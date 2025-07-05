@@ -170,18 +170,20 @@ HBITMAP ImageStitcher::StitchImagesWithFeatureMatching(const std::vector<HBITMAP
                                         // Use median displacement for robustness
                                         std::sort(yDisplacements.begin(), yDisplacements.end());
                                         double medianYDisplacement = yDisplacements[yDisplacements.size() / 2];
-                                        
-                                        // Convert displacement to overlap amount
-                                        bestOverlap = (int)(sectionHeight - medianYDisplacement);
-                                        
-                                        // Allow more flexible overlap range
-                                        bestOverlap = std::max(0, std::min(bestOverlap, std::min(sectionHeight, currentImage.rows - 10)));
+                                                          // Convert displacement to overlap amount
+                        // The displacement tells us how much the images have shifted
+                        // A negative displacement means the new image shows content further down
+                        bestOverlap = (int)(sectionHeight + medianYDisplacement);
+                        
+                        // Allow more flexible overlap range - don't limit to sectionHeight
+                        int maxPossibleOverlap = std::min(currentImage.rows - 10, result.rows / 2);
+                        bestOverlap = std::max(5, std::min(bestOverlap, maxPossibleOverlap));
                                         
                                         foundGoodAlignment = true;
                                         
                                         char dispBuf[256];
-                                        sprintf_s(dispBuf, "ImageStitcher: Calculated optimal overlap: %d pixels (from median displacement: %.2f, section height: %d)\n", 
-                                                 bestOverlap, medianYDisplacement, sectionHeight);
+                                        sprintf_s(dispBuf, "ImageStitcher: Calculated optimal overlap: %d pixels (from median displacement: %.2f, section height: %d, max possible: %d)\n", 
+                                                 bestOverlap, medianYDisplacement, sectionHeight, maxPossibleOverlap);
                                         OutputDebugStringA(dispBuf);
                                     }
                                 }
