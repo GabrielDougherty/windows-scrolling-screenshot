@@ -309,12 +309,12 @@ HBITMAP ImageStitcher::StitchImagesWithFeatureMatching(const std::vector<HBITMAP
                              bestOverlap, bestScore);
                     OutputDebugStringA(tmplBuf);
                 } else {
-                    // If template matching fails, try a conservative small overlap
+                    // If template matching fails, use a conservative small overlap with blending
                     bestOverlap = std::min(20, currentImage.rows / 10);
                     if (bestOverlap > 0) {
-                        foundGoodAlignment = true;
+                        foundGoodAlignment = true; // Enable blending for conservative overlap
                         char conservativeBuf[256];
-                        sprintf_s(conservativeBuf, "ImageStitcher: Using conservative overlap: %d pixels\n", bestOverlap);
+                        sprintf_s(conservativeBuf, "ImageStitcher: Using conservative overlap with blending: %d pixels\n", bestOverlap);
                         OutputDebugStringA(conservativeBuf);
                     } else {
                         OutputDebugStringA("ImageStitcher: No overlap possible, placing adjacent\n");
@@ -330,11 +330,11 @@ HBITMAP ImageStitcher::StitchImagesWithFeatureMatching(const std::vector<HBITMAP
                 sprintf_s(warningBuf, "ImageStitcher: Small overlap (%d pixels) detected - this might be a false match\n", bestOverlap);
                 OutputDebugStringA(warningBuf);
                 
-                // For very small overlaps, fall back to conservative placement
+                // For very small overlaps, fall back to conservative placement with blending
                 bestOverlap = std::min(30, currentImage.rows / 8);
-                foundGoodAlignment = false; // Don't blend, just place
+                // Keep foundGoodAlignment = true so we still blend with the conservative overlap
                 
-                sprintf_s(warningBuf, "ImageStitcher: Using conservative overlap instead: %d pixels\n", bestOverlap);
+                sprintf_s(warningBuf, "ImageStitcher: Using conservative overlap with blending: %d pixels\n", bestOverlap);
                 OutputDebugStringA(warningBuf);
             }
             
