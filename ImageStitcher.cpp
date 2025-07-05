@@ -48,11 +48,20 @@ HBITMAP ImageStitcher::StitchImagesWithFeatureMatching(const std::vector<HBITMAP
             cv::Mat img = HBitmapToMat(bitmap);
             if (!img.empty()) {
                 images.push_back(img);
+                OutputDebugStringA("ImageStitcher: Successfully converted bitmap to Mat\n");
+            } else {
+                OutputDebugStringA("ImageStitcher: Failed to convert bitmap to Mat\n");
             }
         }
         
-        if (images.empty())
+        if (images.empty()) {
+            OutputDebugStringA("ImageStitcher: No images to stitch\n");
             return NULL;
+        }
+        
+        char debugBuf[256];
+        sprintf_s(debugBuf, "ImageStitcher: Processing %d images for feature matching\n", (int)images.size());
+        OutputDebugStringA(debugBuf);
         
         // Result will be a vertically stacked image
         int totalHeight = 0;
@@ -85,14 +94,35 @@ HBITMAP ImageStitcher::StitchImagesWithFeatureMatching(const std::vector<HBITMAP
             if (previousImage.rows > 20 && previousImage.cols > 20 && 
                 currentImage.rows > 20 && currentImage.cols > 20) {
                 
+                OutputDebugStringA("ImageStitcher: Attempting feature matching\n");
+                
                 try {
                     // Convert to grayscale for feature detection
                     cv::Mat prevGray, currGray;
                     cv::cvtColor(previousImage, prevGray, cv::COLOR_BGRA2GRAY);
                     cv::cvtColor(currentImage, currGray, cv::COLOR_BGRA2GRAY);
                     
-                    // In OpenCV 4, SURF is in the xfeatures2d namespace
-                    auto detector = cv::xfeatures2d::SURF::create(400);
+                    OutputDebugStringA("ImageStitcher: Converted to grayscale\n");
+                    
+                    // Try SURF first, fallback to ORB if SURF fails
+                    cv::Ptr<cv::Feature2D> detector;
+                    bool usingSURF = false;
+                    try {
+                        // In OpenCV 4, SURF is in the xfeatures2d namespace
+                        detector = cv::xfeatures2d::SURF::create(400);
+                        usingSURF = true;
+                        OutputDebugStringA("ImageStitcher: Created SURF detector\n");
+                    } catch (const cv::Exception& e) {
+                        char errBuf[512];
+                        sprintf_s(errBuf, "ImageStitcher: SURF not available (%s), using ORB detector\n", e.what());
+                        OutputDebugStringA(errBuf);
+                        detector = cv::ORB::create(1000);
+                        usingSURF = false;
+                    } catch (...) {
+                        OutputDebugStringA("ImageStitcher: SURF not available (unknown error), using ORB detector\n");
+                        detector = cv::ORB::create(1000);
+                        usingSURF = false;
+                    }
                     
                     std::vector<cv::KeyPoint> keypointsPrev, keypointsCurr;
                     cv::Mat descriptorsPrev, descriptorsCurr;
@@ -100,34 +130,90 @@ HBITMAP ImageStitcher::StitchImagesWithFeatureMatching(const std::vector<HBITMAP
                     detector->detect(prevGray, keypointsPrev);
                     detector->detect(currGray, keypointsCurr);
                     
+                    char kpBuf[256];
+                    sprintf_s(kpBuf, "ImageStitcher: Found %d keypoints in prev, %d in curr\n", 
+                             (int)keypointsPrev.size(), (int)keypointsCurr.size());
+                    OutputDebugStringA(kpBuf);
+                    
                     // Check if we have enough keypoints
                     if (keypointsPrev.size() > 4 && keypointsCurr.size() > 4) {
+                        OutputDebugStringA("ImageStitcher: Sufficient keypoints found, computing descriptors\n");
+                        
                         detector->compute(prevGray, keypointsPrev, descriptorsPrev);
                         detector->compute(currGray, keypointsCurr, descriptorsCurr);
                         
                         // Match features
                         std::vector<cv::DMatch> matches;
                         if (!descriptorsPrev.empty() && !descriptorsCurr.empty()) {
-                            cv::Ptr<cv::DescriptorMatcher> matcher = cv::DescriptorMatcher::create(cv::DescriptorMatcher::FLANNBASED);
-                            matcher->match(descriptorsCurr, descriptorsPrev, matches);
+                            OutputDebugStringA("ImageStitcher: Computing matches\n");
                             
-                            // Find good matches
-                            double maxDist = 0, minDist = 100;
-                            for (const auto& match : matches) {
-                                double dist = match.distance;
-                                if (dist < minDist) minDist = dist;
-                                if (dist > maxDist) maxDist = dist;
+                            // Use different matchers based on detector type
+                            cv::Ptr<cv::DescriptorMatcher> matcher;
+                            if (usingSURF) {
+                                // SURF uses float descriptors, use FLANN
+                                matcher = cv::DescriptorMatcher::create(cv::DescriptorMatcher::FLANNBASED);
+                                OutputDebugStringA("ImageStitcher: Using FLANN matcher for SURF\n");
+                            } else {
+                                // ORB uses binary descriptors, use brute force with Hamming distance
+                                matcher = cv::DescriptorMatcher::create(cv::DescriptorMatcher::BRUTEFORCE_HAMMING);
+                                OutputDebugStringA("ImageStitcher: Using Brute Force Hamming matcher for ORB\n");
                             }
                             
-                            std::vector<cv::DMatch> goodMatches;
-                            for (const auto& match : matches) {
-                                if (match.distance < 3 * minDist) {
-                                    goodMatches.push_back(match);
+                            try {
+                                matcher->match(descriptorsCurr, descriptorsPrev, matches);
+                                
+                                char matchBuf[256];
+                                sprintf_s(matchBuf, "ImageStitcher: Found %d raw matches\n", (int)matches.size());
+                                OutputDebugStringA(matchBuf);
+                            } catch (const std::exception& e) {
+                                char matchErrBuf[512];
+                                sprintf_s(matchErrBuf, "ImageStitcher: Matching failed: %s\n", e.what());
+                                OutputDebugStringA(matchErrBuf);
+                                matches.clear();
+                            }
+                            
+                            // Find good matches - adjust based on detector type
+                            if (!matches.empty()) {
+                                double maxDist = 0, minDist = 100;
+                                for (const auto& match : matches) {
+                                    double dist = match.distance;
+                                    if (dist < minDist) minDist = dist;
+                                    if (dist > maxDist) maxDist = dist;
                                 }
-                            }
-                            
-                            // If we have enough good matches, find homography
-                            if (goodMatches.size() > 4) {
+                                
+                                char distBuf[256];
+                                sprintf_s(distBuf, "ImageStitcher: Distance range: min=%.2f, max=%.2f\n", minDist, maxDist);
+                                OutputDebugStringA(distBuf);
+                                
+                                std::vector<cv::DMatch> goodMatches;
+                                double threshold;
+                                
+                                if (usingSURF) {
+                                    // SURF has different distance characteristics
+                                    threshold = std::max(minDist * 4.0, 50.0);
+                                } else {
+                                    // ORB binary descriptors have different distance range (0-256)
+                                    threshold = std::max(minDist * 2.0, 30.0);
+                                    if (threshold > 100) threshold = 100; // Cap at reasonable value for ORB
+                                }
+                                
+                                for (const auto& match : matches) {
+                                    if (match.distance < threshold) {
+                                        goodMatches.push_back(match);
+                                    }
+                                }
+                                
+                                char goodMatchBuf[256];
+                                sprintf_s(goodMatchBuf, "ImageStitcher: Found %d good matches (threshold: %.2f, detector: %s)\n", 
+                                         (int)goodMatches.size(), threshold, usingSURF ? "SURF" : "ORB");
+                                OutputDebugStringA(goodMatchBuf);
+                                
+                                // If we have enough good matches, find homography
+                                if (goodMatches.size() >= 4) { // Reduced from > 4 to >= 4
+                                char goodMatchBuf[256];
+                                sprintf_s(goodMatchBuf, "ImageStitcher: Found %d good matches, computing homography\n", (int)goodMatches.size());
+                                OutputDebugStringA(goodMatchBuf);
+                                
                                 std::vector<cv::Point2f> pointsCurr, pointsPrev;
                                 for (const auto& match : goodMatches) {
                                     pointsCurr.push_back(keypointsCurr[match.queryIdx].pt);
@@ -138,6 +224,7 @@ HBITMAP ImageStitcher::StitchImagesWithFeatureMatching(const std::vector<HBITMAP
                                 cv::Mat H = cv::findHomography(pointsCurr, pointsPrev, cv::RANSAC);
                                 
                                 if (!H.empty()) {
+                                    OutputDebugStringA("ImageStitcher: Successfully computed homography, applying transformation\n");
                                     // Calculate offset for proper alignment
                                     int alignedYOffset = yOffset - 10; // Slight overlap for smoother transition
                                     if (alignedYOffset < 0) alignedYOffset = 0;
@@ -176,18 +263,45 @@ HBITMAP ImageStitcher::StitchImagesWithFeatureMatching(const std::vector<HBITMAP
                                     
                                     // Update previous image for next iteration
                                     currentImage.copyTo(previousImage);
+                                    OutputDebugStringA("ImageStitcher: Feature matching successful for this image\n");
                                     continue;
+                                } else {
+                                    OutputDebugStringA("ImageStitcher: Homography is empty, falling back to simple stacking\n");
                                 }
+                            } else {
+                                char insufficientBuf[256];
+                                sprintf_s(insufficientBuf, "ImageStitcher: Insufficient good matches (%d), falling back to simple stacking\n", (int)goodMatches.size());
+                                OutputDebugStringA(insufficientBuf);
                             }
+                            } else {
+                                OutputDebugStringA("ImageStitcher: No matches found, falling back to simple stacking\n");
+                            }
+                        } else {
+                            OutputDebugStringA("ImageStitcher: Empty descriptors, falling back to simple stacking\n");
                         }
+                    } else {
+                        char insufficientKpBuf[256];
+                        sprintf_s(insufficientKpBuf, "ImageStitcher: Insufficient keypoints (prev: %d, curr: %d), falling back to simple stacking\n", 
+                                 (int)keypointsPrev.size(), (int)keypointsCurr.size());
+                        OutputDebugStringA(insufficientKpBuf);
                     }
                 }
-                catch (...) {
+                catch (const std::exception& e) {
+                    char exBuf[512];
+                    sprintf_s(exBuf, "ImageStitcher: Exception during feature matching: %s\n", e.what());
+                    OutputDebugStringA(exBuf);
                     // If feature matching fails, fall back to simple stacking
                 }
+                catch (...) {
+                    OutputDebugStringA("ImageStitcher: Unknown exception during feature matching, falling back to simple stacking\n");
+                    // If feature matching fails, fall back to simple stacking
+                }
+            } else {
+                OutputDebugStringA("ImageStitcher: Images too small for feature matching, using simple stacking\n");
             }
             
             // If feature matching failed or wasn't attempted, just stack vertically
+            OutputDebugStringA("ImageStitcher: Using simple vertical stacking for this image\n");
             cv::Rect roi_rect(0, yOffset, 
                               std::min(currentImage.cols, result.cols), 
                               std::min(currentImage.rows, result.rows - yOffset));
@@ -210,9 +324,17 @@ HBITMAP ImageStitcher::StitchImagesWithFeatureMatching(const std::vector<HBITMAP
         }
         
         // Convert result back to HBITMAP
+        OutputDebugStringA("ImageStitcher: Converting result back to HBITMAP\n");
         return MatToHBitmap(result);
         
+    } catch (const std::exception& e) {
+        char exBuf[512];
+        sprintf_s(exBuf, "ImageStitcher: Exception in StitchImagesWithFeatureMatching: %s\n", e.what());
+        OutputDebugStringA(exBuf);
+        // Fall back to simple vertical stacking in case of any exception
+        return StitchImagesVertically(bitmaps);
     } catch (...) {
+        OutputDebugStringA("ImageStitcher: Unknown exception in StitchImagesWithFeatureMatching, falling back to simple stacking\n");
         // Fall back to simple vertical stacking in case of any exception
         return StitchImagesVertically(bitmaps);
     }
