@@ -10,21 +10,21 @@
 #include <opencv4/opencv2/xfeatures2d.hpp>
 
 // Class to stitch multiple images together using OpenCV
- class ImageStitcher {
+class ImageStitcher {
 public:
-	    // Stitch multiple bitmaps vertically with feature detection
-		    // Returns the resulting HBITMAP if successful, NULL if failed
-		static HBITMAP StitchImagesWithFeatureMatching(const std::vector<HBITMAP>&bitmaps);
-	
-		    // Stitch multiple bitmaps vertically using a simple approach
-		    // Returns the resulting HBITMAP if successful, NULL if failed
-		static HBITMAP StitchImagesVertically(const std::vector<HBITMAP>&bitmaps);
-	
+	// Stitch multiple bitmaps vertically with feature detection
+		// Returns the resulting HBITMAP if successful, NULL if failed
+	static HBITMAP StitchImagesWithFeatureMatching(const std::vector<HBITMAP>& bitmaps);
+
+	// Stitch multiple bitmaps vertically using a simple approach
+	// Returns the resulting HBITMAP if successful, NULL if failed
+	static HBITMAP StitchImagesVertically(const std::vector<HBITMAP>& bitmaps);
+
 private:
-	    // Convert Windows HBITMAP to OpenCV Mat
-		static cv::Mat HBitmapToMat(HBITMAP hBitmap);
-	
-		    // Convert OpenCV Mat to Windows HBITMAP
-		static HBITMAP MatToHBitmap(const cv::Mat & mat);
-	
+	// Convert Windows HBITMAP to OpenCV Mat
+	static cv::Mat HBitmapToMat(HBITMAP hBitmap);
+
+	// Convert OpenCV Mat to Windows HBITMAP
+	static HBITMAP MatToHBitmap(const cv::Mat& mat);
+
 };
