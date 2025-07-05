@@ -540,7 +540,58 @@ private:
             return false;
         
         EmptyClipboard();
-        SetClipboardData(CF_BITMAP, hBitmap);
+        
+        // For better compatibility with Paint and other applications,
+        // convert to DIB format instead of using CF_BITMAP directly
+        BITMAP bmp;
+        GetObject(hBitmap, sizeof(BITMAP), &bmp);
+        
+        // Create a BITMAPINFO structure
+        BITMAPINFO bi = {0};
+        bi.bmiHeader.biSize = sizeof(BITMAPINFOHEADER);
+        bi.bmiHeader.biWidth = bmp.bmWidth;
+        bi.bmiHeader.biHeight = bmp.bmHeight;
+        bi.bmiHeader.biPlanes = 1;
+        bi.bmiHeader.biBitCount = 24; // Use 24-bit for better Paint compatibility
+        bi.bmiHeader.biCompression = BI_RGB;
+        bi.bmiHeader.biSizeImage = ((bmp.bmWidth * 24 + 31) / 32) * 4 * bmp.bmHeight;
+        
+        // Calculate the size needed for the DIB
+        DWORD dibSize = sizeof(BITMAPINFOHEADER) + bi.bmiHeader.biSizeImage;
+        
+        // Allocate global memory for the DIB
+        HGLOBAL hDIB = GlobalAlloc(GMEM_MOVEABLE, dibSize);
+        if (!hDIB) {
+            CloseClipboard();
+            return false;
+        }
+        
+        LPBITMAPINFO lpbi = (LPBITMAPINFO)GlobalLock(hDIB);
+        if (!lpbi) {
+            GlobalFree(hDIB);
+            CloseClipboard();
+            return false;
+        }
+        
+        // Copy the BITMAPINFO header
+        memcpy(lpbi, &bi, sizeof(BITMAPINFOHEADER));
+        
+        // Get the bitmap bits
+        HDC hdcScreen = GetDC(NULL);
+        if (GetDIBits(hdcScreen, hBitmap, 0, bmp.bmHeight, 
+                     (LPBYTE)lpbi + sizeof(BITMAPINFOHEADER), lpbi, DIB_RGB_COLORS) == 0) {
+            ReleaseDC(NULL, hdcScreen);
+            GlobalUnlock(hDIB);
+            GlobalFree(hDIB);
+            CloseClipboard();
+            return false;
+        }
+        
+        ReleaseDC(NULL, hdcScreen);
+        GlobalUnlock(hDIB);
+        
+        // Set the DIB to clipboard
+        SetClipboardData(CF_DIB, hDIB);
         CloseClipboard();
         
         return true;

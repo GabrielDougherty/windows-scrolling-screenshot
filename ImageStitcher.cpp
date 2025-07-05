@@ -373,32 +373,31 @@ cv::Mat ImageStitcher::HBitmapToMat(HBITMAP hBitmap) {
 }
 
 HBITMAP ImageStitcher::MatToHBitmap(const cv::Mat& mat) {
-    // Ensure the matrix is BGRA (CV_8UC4)
-    cv::Mat bgra;
+    // Convert to BGR (24-bit) for better Paint compatibility
+    cv::Mat bgr;
     
-    if (mat.type() != CV_8UC4) {
-        if (mat.channels() == 3) {
-            cv::cvtColor(mat, bgra, cv::COLOR_BGR2BGRA);
-        } 
-        else if (mat.channels() == 1) {
-            cv::cvtColor(mat, bgra, cv::COLOR_GRAY2BGRA);
-        }
-        else {
-            // Unsupported format, return NULL
-            return NULL;
-        }
+    if (mat.type() == CV_8UC4) {
+        // Convert BGRA to BGR (remove alpha channel)
+        cv::cvtColor(mat, bgr, cv::COLOR_BGRA2BGR);
     } 
+    else if (mat.type() == CV_8UC3) {
+        bgr = mat;
+    }
+    else if (mat.channels() == 1) {
+        cv::cvtColor(mat, bgr, cv::COLOR_GRAY2BGR);
+    }
     else {
-        bgra = mat;
+        // Unsupported format, return NULL
+        return NULL;
     }
     
-    // Create the bitmap info header
+    // Create the bitmap info header for 24-bit BGR
     BITMAPINFO bi = { 0 };
     bi.bmiHeader.biSize = sizeof(BITMAPINFOHEADER);
-    bi.bmiHeader.biWidth = bgra.cols;
-    bi.bmiHeader.biHeight = -bgra.rows;  // Negative for top-down
+    bi.bmiHeader.biWidth = bgr.cols;
+    bi.bmiHeader.biHeight = -bgr.rows;  // Negative for top-down
     bi.bmiHeader.biPlanes = 1;
-    bi.bmiHeader.biBitCount = 32;  // 4 channels (RGBA)
+    bi.bmiHeader.biBitCount = 24;  // 3 channels (BGR), no alpha
     bi.bmiHeader.biCompression = BI_RGB;
     
     // Create a device context
@@ -409,8 +408,13 @@ HBITMAP ImageStitcher::MatToHBitmap(const cv::Mat& mat) {
     HBITMAP hBitmap = CreateDIBSection(hdcScreen, &bi, DIB_RGB_COLORS, &pBits, NULL, 0);
     
     if (hBitmap && pBits) {
-        // Copy the pixel data to the DIB section
-        memcpy(pBits, bgra.data, bgra.total() * bgra.elemSize());
+        // Calculate the stride for 24-bit bitmap (must be 4-byte aligned)
+        int stride = ((bgr.cols * 3 + 3) / 4) * 4;
+        
+        // Copy the pixel data line by line, handling stride alignment
+        for (int y = 0; y < bgr.rows; y++) {
+            memcpy((BYTE*)pBits + y * stride, bgr.ptr<BYTE>(y), bgr.cols * 3);
+        }
     }
     
     ReleaseDC(NULL, hdcScreen);
