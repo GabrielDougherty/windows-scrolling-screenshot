@@ -1,13 +1,13 @@
 #include "ImageStitcher.h"
 #include <Windows.h>
+#include <algorithm> // For std::min
 
 // OpenCV 4 headers
-#include <opencv2/core.hpp>
-#include <opencv2/imgproc.hpp>
-#include <opencv2/highgui.hpp>
-#include <opencv2/calib3d.hpp>
-#include <opencv2/features2d.hpp>
-#include <opencv2/xfeatures2d.hpp> // For SURF/SIFT
+#include <opencv4/opencv2/core.hpp>
+#include <opencv4/opencv2/imgproc.hpp>
+#include <opencv4/opencv2/features2d.hpp>
+#include <opencv4/opencv2/calib3d.hpp>
+#include <opencv4/opencv2/xfeatures2d.hpp>
 
 HBITMAP ImageStitcher::StitchImagesWithFeatureMatching(const std::vector<HBITMAP>& bitmaps) {
     if (bitmaps.empty())
@@ -54,9 +54,6 @@ HBITMAP ImageStitcher::StitchImagesWithFeatureMatching(const std::vector<HBITMAP
         if (images.empty())
             return NULL;
         
-        // For OpenCV 4, we'll use a different approach for stitching
-        // We'll manually stitch images using feature detection and homography
-        
         // Result will be a vertically stacked image
         int totalHeight = 0;
         int maxWidth = 0;
@@ -69,7 +66,7 @@ HBITMAP ImageStitcher::StitchImagesWithFeatureMatching(const std::vector<HBITMAP
         }
         
         // Create result image
-        cv::Mat result = cv::Mat(totalHeight, maxWidth, CV_8UC4, cv::Scalar(255, 255, 255, 255));
+        cv::Mat result(totalHeight, maxWidth, CV_8UC4, cv::Scalar(255, 255, 255, 255));
         
         // First image is the reference
         cv::Mat previousImage = images[0];
@@ -94,7 +91,6 @@ HBITMAP ImageStitcher::StitchImagesWithFeatureMatching(const std::vector<HBITMAP
                     cv::cvtColor(previousImage, prevGray, cv::COLOR_BGRA2GRAY);
                     cv::cvtColor(currentImage, currGray, cv::COLOR_BGRA2GRAY);
                     
-                    // Detect keypoints and compute descriptors using SURF
                     // In OpenCV 4, SURF is in the xfeatures2d namespace
                     auto detector = cv::xfeatures2d::SURF::create(400);
                     
@@ -112,7 +108,6 @@ HBITMAP ImageStitcher::StitchImagesWithFeatureMatching(const std::vector<HBITMAP
                         // Match features
                         std::vector<cv::DMatch> matches;
                         if (!descriptorsPrev.empty() && !descriptorsCurr.empty()) {
-                            // In OpenCV 4, use FlannBasedMatcher with KDTree
                             cv::Ptr<cv::DescriptorMatcher> matcher = cv::DescriptorMatcher::create(cv::DescriptorMatcher::FLANNBASED);
                             matcher->match(descriptorsCurr, descriptorsPrev, matches);
                             
@@ -145,6 +140,7 @@ HBITMAP ImageStitcher::StitchImagesWithFeatureMatching(const std::vector<HBITMAP
                                 if (!H.empty()) {
                                     // Calculate offset for proper alignment
                                     int alignedYOffset = yOffset - 10; // Slight overlap for smoother transition
+                                    if (alignedYOffset < 0) alignedYOffset = 0;
                                     
                                     // Apply perspective transformation to align images
                                     cv::Mat warpedImage;
@@ -152,20 +148,25 @@ HBITMAP ImageStitcher::StitchImagesWithFeatureMatching(const std::vector<HBITMAP
                                                       cv::Size(maxWidth, currentImage.rows));
                                     
                                     // Blend the images where they overlap
-                                    cv::Mat overlapRoi = result(cv::Rect(0, alignedYOffset, 
-                                                               warpedImage.cols, 
-                                                               std::min(warpedImage.rows, totalHeight - alignedYOffset)));
+                                    cv::Rect overlapRect(0, alignedYOffset, 
+                                                         std::min(warpedImage.cols, result.cols),
+                                                         std::min(warpedImage.rows, result.rows - alignedYOffset));
                                     
-                                    // Use alpha blending for smoother transition
-                                    double alpha = 0.7; // Weight for the warped image
-                                    cv::Mat warpedRoi = warpedImage(cv::Rect(0, 0, overlapRoi.cols, overlapRoi.rows));
-                                    
-                                    for (int y = 0; y < overlapRoi.rows; y++) {
-                                        for (int x = 0; x < overlapRoi.cols; x++) {
-                                            if (warpedRoi.at<cv::Vec4b>(y, x)[3] > 0) {
-                                                overlapRoi.at<cv::Vec4b>(y, x) = 
-                                                    alpha * warpedRoi.at<cv::Vec4b>(y, x) + 
-                                                    (1 - alpha) * overlapRoi.at<cv::Vec4b>(y, x);
+                                    if (overlapRect.width > 0 && overlapRect.height > 0) {
+                                        cv::Mat overlapRoi = result(overlapRect);
+                                        cv::Mat warpedRoi = warpedImage(cv::Rect(0, 0, overlapRect.width, overlapRect.height));
+                                        
+                                        // Use alpha blending for smoother transition
+                                        double alpha = 0.7; // Weight for the warped image
+                                        
+                                        for (int y = 0; y < overlapRoi.rows; y++) {
+                                            for (int x = 0; x < overlapRoi.cols; x++) {
+                                                cv::Vec4b& pixelOverlap = overlapRoi.at<cv::Vec4b>(y, x);
+                                                cv::Vec4b& pixelWarped = warpedRoi.at<cv::Vec4b>(y, x);
+                                                
+                                                if (pixelWarped[3] > 0) {  // If not transparent
+                                                    pixelOverlap = alpha * pixelWarped + (1 - alpha) * pixelOverlap;
+                                                }
                                             }
                                         }
                                     }
@@ -187,14 +188,21 @@ HBITMAP ImageStitcher::StitchImagesWithFeatureMatching(const std::vector<HBITMAP
             }
             
             // If feature matching failed or wasn't attempted, just stack vertically
-            cv::Mat roi = result(cv::Rect(0, yOffset, currentImage.cols, currentImage.rows));
-            currentImage.copyTo(roi);
+            cv::Rect roi_rect(0, yOffset, 
+                              std::min(currentImage.cols, result.cols), 
+                              std::min(currentImage.rows, result.rows - yOffset));
             
-            // Add a separator line
-            cv::line(result, 
-                    cv::Point(0, yOffset), 
-                    cv::Point(maxWidth, yOffset), 
-                    cv::Scalar(200, 200, 200, 255), 1);
+            if (roi_rect.width > 0 && roi_rect.height > 0) {
+                cv::Mat roi = result(roi_rect);
+                cv::Mat src_roi = currentImage(cv::Rect(0, 0, roi_rect.width, roi_rect.height));
+                src_roi.copyTo(roi);
+                
+                // Add a separator line
+                cv::line(result, 
+                        cv::Point(0, yOffset), 
+                        cv::Point(maxWidth, yOffset), 
+                        cv::Scalar(200, 200, 200, 255), 1);
+            }
             
             // Update position and reference image
             yOffset += currentImage.rows;
