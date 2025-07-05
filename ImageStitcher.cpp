@@ -149,42 +149,109 @@ HBITMAP ImageStitcher::StitchImagesWithFeatureMatching(const std::vector<HBITMAP
                                 OutputDebugStringA(matchBuf);
                                 
                                 if (goodMatches.size() >= 4) {
-                                    // Calculate the average Y displacement using median instead of mean for robustness
-                                    std::vector<double> yDisplacements;
-                                    
+                                    // First, perform geometric consistency check using RANSAC
+                                    std::vector<cv::Point2f> pointsCurr, pointsPrev;
                                     for (const auto& match : goodMatches) {
-                                        cv::Point2f ptCurr = keypointsCurr[match.queryIdx].pt;
-                                        cv::Point2f ptPrev = keypointsPrev[match.trainIdx].pt;
-                                        
-                                        // For vertical scrolling, calculate where the current image should be placed
-                                        // relative to the previous section
-                                        double yDisplacement = ptPrev.y - ptCurr.y;
-                                        
-                                        // Filter out completely unreasonable displacements
-                                        if (yDisplacement > -sectionHeight * 2 && yDisplacement < sectionHeight * 2) {
-                                            yDisplacements.push_back(yDisplacement);
-                                        }
+                                        pointsCurr.push_back(keypointsCurr[match.queryIdx].pt);
+                                        pointsPrev.push_back(keypointsPrev[match.trainIdx].pt);
                                     }
                                     
-                                    if (yDisplacements.size() >= 3) {
-                                        // Use median displacement for robustness
-                                        std::sort(yDisplacements.begin(), yDisplacements.end());
-                                        double medianYDisplacement = yDisplacements[yDisplacements.size() / 2];
-                                                          // Convert displacement to overlap amount
-                        // The displacement tells us how much the images have shifted
-                        // A negative displacement means the new image shows content further down
-                        bestOverlap = (int)(sectionHeight + medianYDisplacement);
-                        
-                        // Allow more flexible overlap range - don't limit to sectionHeight
-                        int maxPossibleOverlap = std::min(currentImage.rows - 10, result.rows / 2);
-                        bestOverlap = std::max(5, std::min(bestOverlap, maxPossibleOverlap));
+                                    // Use RANSAC to find geometrically consistent matches
+                                    std::vector<uchar> inlierMask;
+                                    cv::Mat homography;
+                                    try {
+                                        homography = cv::findHomography(pointsCurr, pointsPrev, cv::RANSAC, 3.0, inlierMask);
                                         
-                                        foundGoodAlignment = true;
+                                        // Count inliers
+                                        int inlierCount = 0;
+                                        for (int i = 0; i < inlierMask.size(); i++) {
+                                            if (inlierMask[i]) inlierCount++;
+                                        }
                                         
-                                        char dispBuf[256];
-                                        sprintf_s(dispBuf, "ImageStitcher: Calculated optimal overlap: %d pixels (from median displacement: %.2f, section height: %d, max possible: %d)\n", 
-                                                 bestOverlap, medianYDisplacement, sectionHeight, maxPossibleOverlap);
-                                        OutputDebugStringA(dispBuf);
+                                        char ransacBuf[256];
+                                        sprintf_s(ransacBuf, "ImageStitcher: RANSAC found %d inliers out of %d matches\n", 
+                                                 inlierCount, (int)goodMatches.size());
+                                        OutputDebugStringA(ransacBuf);
+                                        
+                                        // Only proceed if we have enough geometrically consistent matches
+                                        if (inlierCount >= 6) {
+                                            // Calculate displacement using only inliers
+                                            std::vector<double> yDisplacements;
+                                            
+                                            for (int i = 0; i < goodMatches.size(); i++) {
+                                                if (inlierMask[i]) {
+                                                    cv::Point2f ptCurr = keypointsCurr[goodMatches[i].queryIdx].pt;
+                                                    cv::Point2f ptPrev = keypointsPrev[goodMatches[i].trainIdx].pt;
+                                                    
+                                                    double yDisplacement = ptPrev.y - ptCurr.y;
+                                                    
+                                                    // For vertical scrolling, we expect mainly vertical displacement
+                                                    if (yDisplacement > -sectionHeight * 2 && yDisplacement < sectionHeight * 2) {
+                                                        yDisplacements.push_back(yDisplacement);
+                                                    }
+                                                }
+                                            }
+                                            
+                                            if (yDisplacements.size() >= 3) {
+                                                // Use median displacement for robustness
+                                                std::sort(yDisplacements.begin(), yDisplacements.end());
+                                                double medianYDisplacement = yDisplacements[yDisplacements.size() / 2];
+                                                
+                                                // Convert displacement to overlap amount
+                                                // The displacement tells us how much the images have shifted
+                                                // A negative displacement means the new image shows content further down
+                                                bestOverlap = (int)(sectionHeight + medianYDisplacement);
+                                                
+                                                // Allow more flexible overlap range - don't limit to sectionHeight
+                                                int maxPossibleOverlap = std::min(currentImage.rows - 10, result.rows / 2);
+                                                bestOverlap = std::max(5, std::min(bestOverlap, maxPossibleOverlap));
+                                                
+                                                foundGoodAlignment = true;
+                                                
+                                                char dispBuf[256];
+                                                sprintf_s(dispBuf, "ImageStitcher: Calculated optimal overlap: %d pixels (from median displacement: %.2f, section height: %d, max possible: %d)\n", 
+                                                         bestOverlap, medianYDisplacement, sectionHeight, maxPossibleOverlap);
+                                                OutputDebugStringA(dispBuf);
+                                            } else {
+                                                OutputDebugStringA("ImageStitcher: Not enough valid inlier displacements\n");
+                                            }
+                                        } else {
+                                            OutputDebugStringA("ImageStitcher: Not enough geometrically consistent matches for reliable alignment\n");
+                                        }
+                                    } catch (const std::exception& e) {
+                                        char ransacErrBuf[256];
+                                        sprintf_s(ransacErrBuf, "ImageStitcher: RANSAC error: %s\n", e.what());
+                                        OutputDebugStringA(ransacErrBuf);
+                                        
+                                        // Fall back to the old method without geometric verification
+                                        std::vector<double> yDisplacements;
+                                        
+                                        for (const auto& match : goodMatches) {
+                                            cv::Point2f ptCurr = keypointsCurr[match.queryIdx].pt;
+                                            cv::Point2f ptPrev = keypointsPrev[match.trainIdx].pt;
+                                            
+                                            double yDisplacement = ptPrev.y - ptCurr.y;
+                                            
+                                            if (yDisplacement > -sectionHeight * 2 && yDisplacement < sectionHeight * 2) {
+                                                yDisplacements.push_back(yDisplacement);
+                                            }
+                                        }
+                                        
+                                        if (yDisplacements.size() >= 3) {
+                                            std::sort(yDisplacements.begin(), yDisplacements.end());
+                                            double medianYDisplacement = yDisplacements[yDisplacements.size() / 2];
+                                            
+                                            bestOverlap = (int)(sectionHeight + medianYDisplacement);
+                                            int maxPossibleOverlap = std::min(currentImage.rows - 10, result.rows / 2);
+                                            bestOverlap = std::max(5, std::min(bestOverlap, maxPossibleOverlap));
+                                            
+                                            foundGoodAlignment = true;
+                                            
+                                            char dispBuf[256];
+                                            sprintf_s(dispBuf, "ImageStitcher: Fallback overlap calculation: %d pixels (from median displacement: %.2f)\n", 
+                                                     bestOverlap, medianYDisplacement);
+                                            OutputDebugStringA(dispBuf);
+                                        }
                                     }
                                 }
                             }
@@ -256,6 +323,21 @@ HBITMAP ImageStitcher::StitchImagesWithFeatureMatching(const std::vector<HBITMAP
             }
             
             // Apply the calculated overlap and extend the result image
+            // But first, validate that the overlap makes sense
+            if (foundGoodAlignment && bestOverlap < 10 && bestOverlap > 0) {
+                // Very small overlaps might indicate false matches, especially for repetitive content
+                char warningBuf[256];
+                sprintf_s(warningBuf, "ImageStitcher: Small overlap (%d pixels) detected - this might be a false match\n", bestOverlap);
+                OutputDebugStringA(warningBuf);
+                
+                // For very small overlaps, fall back to conservative placement
+                bestOverlap = std::min(30, currentImage.rows / 8);
+                foundGoodAlignment = false; // Don't blend, just place
+                
+                sprintf_s(warningBuf, "ImageStitcher: Using conservative overlap instead: %d pixels\n", bestOverlap);
+                OutputDebugStringA(warningBuf);
+            }
+            
             int newHeight = result.rows + currentImage.rows - bestOverlap;
             int newWidth = std::max(result.cols, currentImage.cols);
             
