@@ -3,11 +3,11 @@
 #include <algorithm> // For std::min
 
 // OpenCV 4 headers
-#include <opencv4/opencv2/core.hpp>
-#include <opencv4/opencv2/imgproc.hpp>
-#include <opencv4/opencv2/features2d.hpp>
-#include <opencv4/opencv2/calib3d.hpp>
-#include <opencv4/opencv2/xfeatures2d.hpp>
+#include <opencv2/core.hpp>
+#include <opencv2/imgproc.hpp>
+#include <opencv2/features2d.hpp>
+#include <opencv2/calib3d.hpp>
+#include <opencv2/xfeatures2d.hpp>
 
 HBITMAP ImageStitcher::StitchImagesWithFeatureMatching(const std::vector<HBITMAP>& bitmaps) {
     if (bitmaps.empty())
